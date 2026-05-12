@@ -1,0 +1,76 @@
+{
+  "name": "Sales Warehouse (Messy)",
+  "model_type": "physical",
+  "description": "A star schema with intentional 1NF violations (addr1/addr2/addr3, CSV tags) and zero glossary coverage. Expected to score in the C range.",
+  "subject_areas": [
+    {"id": "sa_wh", "name": "Warehouse"}
+  ],
+  "entities": [
+    {
+      "id": "e_fact_sales",
+      "logical_name": "Fact Sales",
+      "physical_name": "fact_sales",
+      "subject_area": "sa_wh",
+      "attributes": [
+        {"id": "a_fs_id", "logical_name": "Sale Id", "physical_name": "sale_id", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_fs_cust", "logical_name": "Customer Sk", "physical_name": "customer_sk", "data_type": "BIGINT", "is_nullable": false, "position": 2},
+        {"id": "a_fs_prod", "logical_name": "Product Sk", "physical_name": "product_sk", "data_type": "BIGINT", "is_nullable": false, "position": 3},
+        {"id": "a_fs_amount", "logical_name": "Amount", "physical_name": "amount", "data_type": "NUMERIC(12,2)", "is_nullable": false, "position": 4},
+        {"id": "a_fs_date", "logical_name": "Sale Date", "physical_name": "sale_date", "data_type": "DATE", "is_nullable": false, "position": 5}
+      ],
+      "keys": [
+        {"id": "k_fs_pk", "name": "pk_fact_sales", "key_type": "PK", "members": ["a_fs_id"]}
+      ]
+    },
+    {
+      "id": "e_dim_customer",
+      "logical_name": "Dim Customer",
+      "physical_name": "dim_customer",
+      "subject_area": "sa_wh",
+      "attributes": [
+        {"id": "a_dc_sk", "logical_name": "Customer Sk", "physical_name": "customer_sk", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_dc_name", "logical_name": "Name", "physical_name": "name", "data_type": "VARCHAR(256)", "is_nullable": false, "position": 2},
+        {"id": "a_dc_addr1", "logical_name": "Address Line 1", "physical_name": "addr1", "data_type": "VARCHAR(256)", "is_nullable": true, "position": 3},
+        {"id": "a_dc_addr2", "logical_name": "Address Line 2", "physical_name": "addr2", "data_type": "VARCHAR(256)", "is_nullable": true, "position": 4},
+        {"id": "a_dc_addr3", "logical_name": "Address Line 3", "physical_name": "addr3", "data_type": "VARCHAR(256)", "is_nullable": true, "position": 5},
+        {"id": "a_dc_tags", "logical_name": "Tags", "physical_name": "tags", "data_type": "VARCHAR(1024)", "is_nullable": true, "position": 6, "comment": "CSV of segment tags"},
+        {"id": "a_dc_email", "logical_name": "Email", "physical_name": "customer_email", "data_type": "VARCHAR(500)", "is_nullable": true, "position": 7}
+      ],
+      "keys": [
+        {"id": "k_dc_pk", "name": "pk_dim_customer", "key_type": "PK", "members": ["a_dc_sk"]}
+      ]
+    },
+    {
+      "id": "e_dim_product",
+      "logical_name": "Dim Product",
+      "physical_name": "dim_product",
+      "subject_area": "sa_wh",
+      "attributes": [
+        {"id": "a_dp_sk", "logical_name": "Product Sk", "physical_name": "product_sk", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_dp_name", "logical_name": "Name", "physical_name": "name", "data_type": "VARCHAR(256)", "is_nullable": false, "position": 2},
+        {"id": "a_dp_category", "logical_name": "Category", "physical_name": "category", "data_type": "VARCHAR(64)", "is_nullable": true, "position": 3}
+      ],
+      "keys": [
+        {"id": "k_dp_pk", "name": "pk_dim_product", "key_type": "PK", "members": ["a_dp_sk"]}
+      ]
+    },
+    {
+      "id": "e_dim_date",
+      "logical_name": "Dim Date",
+      "physical_name": "dim_date",
+      "subject_area": "sa_wh",
+      "is_standalone": true,
+      "attributes": [
+        {"id": "a_dd_date", "logical_name": "Date Key", "physical_name": "date_key", "data_type": "DATE", "is_nullable": false, "position": 1},
+        {"id": "a_dd_year", "logical_name": "Year", "physical_name": "year", "data_type": "INTEGER", "is_nullable": false, "position": 2}
+      ],
+      "keys": [
+        {"id": "k_dd_pk", "name": "pk_dim_date", "key_type": "PK", "members": ["a_dd_date"]}
+      ]
+    }
+  ],
+  "relationships": [
+    {"id": "r_fs_dc", "name": "fact_sales_customer", "parent": "e_dim_customer", "child": "e_fact_sales", "cardinality": "one_to_many"},
+    {"id": "r_fs_dp", "name": "fact_sales_product", "parent": "e_dim_product", "child": "e_fact_sales", "cardinality": "one_to_many"}
+  ]
+}

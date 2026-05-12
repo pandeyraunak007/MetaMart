@@ -29,6 +29,11 @@ Run migrations:
 alembic upgrade head
 ```
 
+Seed the database (admin user + Default library + Demo folder + 3 sample catalogs):
+```sh
+python seed.py
+```
+
 Run the API:
 ```sh
 uvicorn metamart.main:app --reload

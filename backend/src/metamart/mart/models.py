@@ -255,3 +255,18 @@ PERM_ADMIN = 8
 PERM_MANAGE_PERMS = 16
 PERM_MANAGE_RULES = 32
 PERM_WAIVE_FINDINGS = 64
+
+
+# Register SCD2 specialization mappers on Base.metadata so Alembic picks them up.
+from metamart.mart.specializations import (  # noqa: E402, F401
+    M70Attribute,
+    M70Domain,
+    M70Entity,
+    M70GlossaryTerm,
+    M70Key,
+    M70KeyMember,
+    M70LineageEdge,
+    M70RelationshipLogical,
+    M70SubjectArea,
+    M70UDP,
+)

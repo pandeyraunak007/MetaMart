@@ -1,0 +1,88 @@
+{
+  "name": "Northwind OLTP",
+  "model_type": "physical",
+  "description": "Clean snake_case OLTP schema with full PKs, FKs, and glossary coverage.",
+  "subject_areas": [
+    {"id": "sa_sales", "name": "Sales", "description": "Customer-facing transactional area"}
+  ],
+  "domains": [
+    {"id": "d_email", "name": "Email", "data_type": "VARCHAR(320)", "check_constraint": "value ~ '@'", "description": "RFC-5321 email"},
+    {"id": "d_money", "name": "Money", "data_type": "NUMERIC(12,2)"}
+  ],
+  "glossary": [
+    {"id": "g_customer", "name": "Customer", "definition": "An individual or organization that purchases goods or services.", "status": "approved"},
+    {"id": "g_order", "name": "Order", "definition": "A customer request for goods or services at a moment in time.", "status": "approved"},
+    {"id": "g_product", "name": "Product", "definition": "A sellable item in the catalog.", "status": "approved"}
+  ],
+  "entities": [
+    {
+      "id": "e_customer",
+      "logical_name": "Customer",
+      "physical_name": "customer",
+      "subject_area": "sa_sales",
+      "glossary_terms": ["g_customer"],
+      "attributes": [
+        {"id": "a_cust_id", "logical_name": "Customer Id", "physical_name": "customer_id", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_cust_email", "logical_name": "Email", "physical_name": "email", "data_type": "VARCHAR(320)", "domain": "d_email", "is_nullable": false, "position": 2},
+        {"id": "a_cust_name", "logical_name": "Name", "physical_name": "name", "data_type": "VARCHAR(256)", "is_nullable": false, "position": 3},
+        {"id": "a_cust_created", "logical_name": "Created At", "physical_name": "created_at", "data_type": "TIMESTAMPTZ", "is_nullable": false, "position": 4}
+      ],
+      "keys": [
+        {"id": "k_cust_pk", "name": "pk_customer", "key_type": "PK", "members": ["a_cust_id"]},
+        {"id": "k_cust_email_ak", "name": "ak_customer_email", "key_type": "AK", "members": ["a_cust_email"]}
+      ]
+    },
+    {
+      "id": "e_order",
+      "logical_name": "Order",
+      "physical_name": "order_header",
+      "subject_area": "sa_sales",
+      "glossary_terms": ["g_order"],
+      "attributes": [
+        {"id": "a_ord_id", "logical_name": "Order Id", "physical_name": "order_id", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_ord_cust", "logical_name": "Customer Id", "physical_name": "customer_id", "data_type": "BIGINT", "is_nullable": false, "position": 2},
+        {"id": "a_ord_total", "logical_name": "Total", "physical_name": "total", "data_type": "NUMERIC(12,2)", "domain": "d_money", "is_nullable": false, "position": 3},
+        {"id": "a_ord_placed", "logical_name": "Placed At", "physical_name": "placed_at", "data_type": "TIMESTAMPTZ", "is_nullable": false, "position": 4}
+      ],
+      "keys": [
+        {"id": "k_ord_pk", "name": "pk_order", "key_type": "PK", "members": ["a_ord_id"]}
+      ]
+    },
+    {
+      "id": "e_order_item",
+      "logical_name": "Order Item",
+      "physical_name": "order_item",
+      "subject_area": "sa_sales",
+      "attributes": [
+        {"id": "a_oi_id", "logical_name": "Order Item Id", "physical_name": "order_item_id", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_oi_ord", "logical_name": "Order Id", "physical_name": "order_id", "data_type": "BIGINT", "is_nullable": false, "position": 2},
+        {"id": "a_oi_prod", "logical_name": "Product Id", "physical_name": "product_id", "data_type": "BIGINT", "is_nullable": false, "position": 3},
+        {"id": "a_oi_qty", "logical_name": "Quantity", "physical_name": "quantity", "data_type": "INTEGER", "is_nullable": false, "position": 4},
+        {"id": "a_oi_price", "logical_name": "Unit Price", "physical_name": "unit_price", "data_type": "NUMERIC(12,2)", "domain": "d_money", "is_nullable": false, "position": 5}
+      ],
+      "keys": [
+        {"id": "k_oi_pk", "name": "pk_order_item", "key_type": "PK", "members": ["a_oi_id"]}
+      ]
+    },
+    {
+      "id": "e_product",
+      "logical_name": "Product",
+      "physical_name": "product",
+      "subject_area": "sa_sales",
+      "glossary_terms": ["g_product"],
+      "attributes": [
+        {"id": "a_prod_id", "logical_name": "Product Id", "physical_name": "product_id", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_prod_name", "logical_name": "Name", "physical_name": "name", "data_type": "VARCHAR(256)", "is_nullable": false, "position": 2},
+        {"id": "a_prod_price", "logical_name": "Price", "physical_name": "price", "data_type": "NUMERIC(12,2)", "domain": "d_money", "is_nullable": false, "position": 3}
+      ],
+      "keys": [
+        {"id": "k_prod_pk", "name": "pk_product", "key_type": "PK", "members": ["a_prod_id"]}
+      ]
+    }
+  ],
+  "relationships": [
+    {"id": "r_cust_ord", "name": "customer_orders", "parent": "e_customer", "child": "e_order", "cardinality": "one_to_many", "is_identifying": false},
+    {"id": "r_ord_oi", "name": "order_items", "parent": "e_order", "child": "e_order_item", "cardinality": "one_to_many", "is_identifying": true},
+    {"id": "r_prod_oi", "name": "product_order_items", "parent": "e_product", "child": "e_order_item", "cardinality": "one_to_many", "is_identifying": false}
+  ]
+}
