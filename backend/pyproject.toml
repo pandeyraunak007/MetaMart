@@ -1,0 +1,38 @@
+[project]
+name = "metamart"
+version = "0.1.0"
+description = "MetaMart Quality — Mart-Portal-style data model quality scoring"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy>=2.0.30",
+    "alembic>=1.13.0",
+    "psycopg[binary]>=3.2.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "arq>=0.26.0",
+    "redis>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "httpx>=0.27.0",
+    "ruff>=0.6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/metamart"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
