@@ -17,6 +17,26 @@ export interface Finding {
   target_name: string | null
   message: string
   remediation: string | null
+  fixable: boolean
+}
+
+export interface AppliedFix {
+  rule_id: string
+  target_obj_id: number
+  description: string
+}
+
+export interface FixResponse {
+  applied: boolean
+  description: string
+  catalog: unknown
+  result: ScanResult
+}
+
+export interface FixAllResponse {
+  catalog: unknown
+  applied: AppliedFix[]
+  result: ScanResult
 }
 
 export interface SubScore {

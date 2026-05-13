@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { scoreJson } from './api'
+import { fixAll, fixFinding, scoreJson } from './api'
 import type { MartState } from './types'
 import {
   addScan,
@@ -8,9 +8,11 @@ import {
   createModel,
   deleteModel,
   findModel,
+  forkModel,
   loadState,
   renameModel,
   saveState,
+  updateModelCatalog,
 } from './storage'
 import Banner from './components/Banner'
 import Sidebar from './components/Sidebar'
@@ -28,6 +30,11 @@ export default function App() {
   const [selectedLibraryId, setSelectedLibraryId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [fixing, setFixing] = useState(false)
+  const [fixingTarget, setFixingTarget] = useState<{
+    ruleId: string
+    targetObjId: number
+  } | null>(null)
 
   // Default the folder selection to the first folder of the first library so
   // the inline uploader has a clear "save under here" target.
@@ -102,6 +109,68 @@ export default function App() {
     setSelectedModelId(null)
   }
 
+  async function handleFix(ruleId: string, targetObjId: number) {
+    if (!selected) return
+    setError(null)
+    setFixing(true)
+    setFixingTarget({ ruleId, targetObjId })
+    try {
+      const resp = await fixFinding(selected.model.catalog_json, ruleId, targetObjId)
+      if (!resp.applied) {
+        setError(`Fix not applied: ${resp.description}`)
+        return
+      }
+      persist(
+        updateModelCatalog(
+          state,
+          selected.model.id,
+          resp.catalog,
+          resp.result,
+          `Fix: ${resp.description}`
+        )
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setFixing(false)
+      setFixingTarget(null)
+    }
+  }
+
+  async function handleFixAll() {
+    if (!selected) return
+    setError(null)
+    setFixing(true)
+    try {
+      const resp = await fixAll(selected.model.catalog_json)
+      if (resp.applied.length === 0) {
+        setError('No auto-fixable findings to apply.')
+        return
+      }
+      persist(
+        updateModelCatalog(
+          state,
+          selected.model.id,
+          resp.catalog,
+          resp.result,
+          `Fix-all: applied ${resp.applied.length} fix${resp.applied.length === 1 ? '' : 'es'}`
+        )
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setFixing(false)
+    }
+  }
+
+  function handleFork(newName: string) {
+    if (!selected) return
+    const result = forkModel(state, selected.model.id, newName)
+    if (!result) return
+    persist(result.state)
+    setSelectedModelId(result.modelId)
+  }
+
   // The "Add model to this folder" button in the sidebar shifts focus to the
   // empty-state uploader and clears the current model selection.
   function handleRequestNewModel(folderId: string, libraryId: string) {
@@ -169,9 +238,14 @@ export default function App() {
             <ModelView
               model={selected.model}
               rescoring={busy}
+              fixing={fixing}
+              fixingTarget={fixingTarget}
               onRescore={handleRescore}
               onRename={handleRename}
               onDelete={handleDelete}
+              onFix={handleFix}
+              onFixAll={handleFixAll}
+              onFork={handleFork}
             />
           ) : (
             <div className="h-full overflow-y-auto px-8 py-10">

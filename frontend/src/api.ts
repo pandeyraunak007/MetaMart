@@ -1,4 +1,4 @@
-import type { ScanResult } from './types'
+import type { FixAllResponse, FixResponse, ScanResult } from './types'
 
 interface FastApiValidationError {
   loc?: (string | number)[]
@@ -54,4 +54,37 @@ export async function scoreJson(catalog: unknown): Promise<ScanResult> {
     throw new Error(`${resp.status}: ${formatErrorDetail(raw)}`)
   }
   return (await resp.json()) as ScanResult
+}
+
+export async function fixFinding(
+  catalog: unknown,
+  ruleId: string,
+  targetObjId: number
+): Promise<FixResponse> {
+  const resp = await fetch('/api/v1/quality/fix', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ catalog, rule_id: ruleId, target_obj_id: targetObjId }),
+  })
+  if (!resp.ok) {
+    const raw = await resp.text()
+    throw new Error(`${resp.status}: ${formatErrorDetail(raw)}`)
+  }
+  return (await resp.json()) as FixResponse
+}
+
+export async function fixAll(
+  catalog: unknown,
+  ruleIds?: string[]
+): Promise<FixAllResponse> {
+  const resp = await fetch('/api/v1/quality/fix-all', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(ruleIds ? { catalog, rule_ids: ruleIds } : { catalog }),
+  })
+  if (!resp.ok) {
+    const raw = await resp.text()
+    throw new Error(`${resp.status}: ${formatErrorDetail(raw)}`)
+  }
+  return (await resp.json()) as FixAllResponse
 }

@@ -10,6 +10,7 @@ class FindingRead(BaseModel):
     target_name: str | None = None
     message: str
     remediation: str | None = None
+    fixable: bool = False
 
 
 class SubScoreRead(BaseModel):

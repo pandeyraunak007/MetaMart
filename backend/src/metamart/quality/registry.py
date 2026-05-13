@@ -3,6 +3,11 @@
 Rules are functions `(catalog: CatalogSnapshot, params: dict) -> list[Finding]`
 registered via the `@registry.register(...)` decorator. The engine walks
 `registry.all()` and produces findings.
+
+Optional companion: each rule may register an `auto_fix` function via
+`@registry.register_fix(rule_id=...)`. Given a finding and the user's raw
+catalog dict, the fix returns a patched catalog plus a human-readable
+description (or None if it can't fix this particular instance).
 """
 from __future__ import annotations
 
@@ -18,6 +23,13 @@ if TYPE_CHECKING:
 
 
 RuleFunc = Callable[["CatalogSnapshot", dict], list["Finding"]]
+# (catalog_dict, finding, snapshot) -> (patched_catalog | None, description).
+# Returning None means "this finding isn't actually fixable in context"
+# (e.g. the violation already self-resolved or required state isn't there).
+FixFunc = Callable[
+    [dict, "Finding", "CatalogSnapshot"],
+    tuple[dict | None, str],
+]
 
 
 @dataclass(frozen=True)
@@ -32,6 +44,7 @@ class RuleSpec:
 class RuleRegistry:
     def __init__(self) -> None:
         self._rules: dict[str, RuleSpec] = {}
+        self._fixers: dict[str, FixFunc] = {}
 
     def register(
         self,
@@ -55,6 +68,21 @@ class RuleRegistry:
 
         return decorator
 
+    def register_fix(self, *, rule_id: str) -> Callable[[FixFunc], FixFunc]:
+        def decorator(func: FixFunc) -> FixFunc:
+            if rule_id in self._fixers:
+                raise ValueError(f"Fixer for '{rule_id}' is already registered")
+            self._fixers[rule_id] = func
+            return func
+
+        return decorator
+
+    def fixer(self, rule_id: str) -> FixFunc | None:
+        return self._fixers.get(rule_id)
+
+    def has_fixer(self, rule_id: str) -> bool:
+        return rule_id in self._fixers
+
     def get(self, rule_id: str) -> RuleSpec:
         return self._rules[rule_id]
 
@@ -63,6 +91,7 @@ class RuleRegistry:
 
     def clear(self) -> None:
         self._rules.clear()
+        self._fixers.clear()
 
 
 # Global registry. M4's rule modules decorate against this.

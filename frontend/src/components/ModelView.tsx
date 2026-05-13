@@ -12,14 +12,50 @@ type Tab = 'overview' | 'score' | 'versions' | 'audit'
 interface Props {
   model: SavedModel
   rescoring: boolean
+  fixing: boolean
+  fixingTarget: { ruleId: string; targetObjId: number } | null
   onRescore: () => void
   onRename: (name: string) => void
   onDelete: () => void
+  onFix: (ruleId: string, targetObjId: number) => Promise<void> | void
+  onFixAll: () => Promise<void> | void
+  onFork: (newName: string) => void
 }
 
-export default function ModelView({ model, rescoring, onRescore, onRename, onDelete }: Props) {
+export default function ModelView({
+  model,
+  rescoring,
+  fixing,
+  fixingTarget,
+  onRescore,
+  onRename,
+  onDelete,
+  onFix,
+  onFixAll,
+  onFork,
+}: Props) {
   const [tab, setTab] = useState<Tab>('score')
   const last = latestScan(model)
+
+  function handleDownload() {
+    const json = JSON.stringify(model.catalog_json, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const safeName = model.name.replace(/[^a-z0-9._-]+/gi, '_')
+    a.download = `${safeName}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleFork() {
+    const suggested = `${model.name} (copy)`
+    const name = prompt('Save as a copy — name?', suggested)
+    if (name && name.trim()) onFork(name.trim())
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -41,6 +77,20 @@ export default function ModelView({ model, rescoring, onRescore, onRename, onDel
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleDownload}
+              title="Download the (possibly fixed) model JSON"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+            >
+              Download JSON
+            </button>
+            <button
+              onClick={handleFork}
+              title="Save the current state as a new model"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+            >
+              Save as copy
+            </button>
             <button
               onClick={() => {
                 const name = prompt('Rename model:', model.name)
@@ -95,7 +145,14 @@ export default function ModelView({ model, rescoring, onRescore, onRename, onDel
         {tab === 'overview' && <OverviewTab model={model} />}
         {tab === 'score' && (
           last ? (
-            <ScoreTab modelName={model.name} result={last.result} />
+            <ScoreTab
+              modelName={model.name}
+              result={last.result}
+              onFix={onFix}
+              onFixAll={onFixAll}
+              fixing={fixing}
+              fixingTarget={fixingTarget}
+            />
           ) : (
             <EmptyMsg text="No score yet. Click Re-score above." />
           )
@@ -132,7 +189,21 @@ function OverviewTab({ model }: { model: SavedModel }) {
   )
 }
 
-function ScoreTab({ modelName, result }: { modelName: string; result: import('../types').ScanResult }) {
+function ScoreTab({
+  modelName,
+  result,
+  onFix,
+  onFixAll,
+  fixing,
+  fixingTarget,
+}: {
+  modelName: string
+  result: import('../types').ScanResult
+  onFix: (ruleId: string, targetObjId: number) => Promise<void> | void
+  onFixAll: () => Promise<void> | void
+  fixing: boolean
+  fixingTarget: { ruleId: string; targetObjId: number } | null
+}) {
   return (
     <div className="space-y-6">
       <ScoreHero result={result} modelName={modelName} />
@@ -140,7 +211,13 @@ function ScoreTab({ modelName, result }: { modelName: string; result: import('..
         <RadarPanel subScores={result.sub_scores} />
         <SubScoreList subScores={result.sub_scores} />
       </div>
-      <FindingsList findings={result.findings} />
+      <FindingsList
+        findings={result.findings}
+        onFix={onFix}
+        onFixAll={onFixAll}
+        fixing={fixing}
+        fixingTarget={fixingTarget}
+      />
     </div>
   )
 }

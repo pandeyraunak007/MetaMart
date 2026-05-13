@@ -42,6 +42,7 @@ def score_catalog(
         findings.extend(rule_out)
 
     findings = _resolve_target_names(findings, catalog)
+    findings = _mark_fixable(findings, reg)
 
     findings_by_dim: dict[Dimension, list[Finding]] = defaultdict(list)
     for f in findings:
@@ -79,6 +80,12 @@ def score_catalog(
         sub_scores=sub_scores,
         findings=findings,
     )
+
+
+def _mark_fixable(findings: list[Finding], reg: RuleRegistry) -> list[Finding]:
+    return [
+        replace(f, fixable=reg.has_fixer(f.rule_id)) for f in findings
+    ]
 
 
 def _resolve_target_names(

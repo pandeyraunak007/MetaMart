@@ -52,6 +52,9 @@ class Finding:
     # Resolved by the engine after rules run — UI uses this for friendly
     # drill-down without re-walking the catalog. "Entity" or "Entity.attr".
     target_name: str | None = None
+    # True if this rule has a registered auto_fix function. The frontend
+    # uses this flag to decide whether to render a Fix button.
+    fixable: bool = False
 
 
 @dataclass(frozen=True)

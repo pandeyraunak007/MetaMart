@@ -157,6 +157,59 @@ export function renameModel(
   }))
 }
 
+export function updateModelCatalog(
+  state: MartState,
+  modelId: string,
+  newCatalog: unknown,
+  newScan: ScanResult,
+  auditMessage: string
+): MartState {
+  return mapModel(state, modelId, (m) => ({
+    ...m,
+    catalog_json: newCatalog,
+    scans: [{ id: uid('scan'), scanned_at: nowIso(), result: newScan }, ...m.scans],
+    audit: [
+      audit('model_scored', auditMessage),
+      ...m.audit,
+    ],
+    updated_at: nowIso(),
+  }))
+}
+
+export function forkModel(
+  state: MartState,
+  modelId: string,
+  newName: string
+): { state: MartState; modelId: string } | null {
+  const found = findModel(state, modelId)
+  if (!found) return null
+  const created = nowIso()
+  const newId = uid('mdl')
+  const last = latestScan(found.model)
+  const initialScans: Scan[] = last
+    ? [{ id: uid('scan'), scanned_at: created, result: last.result }]
+    : []
+  const fork: SavedModel = {
+    id: newId,
+    name: newName.trim() || `${found.model.name} (copy)`,
+    catalog_json: structuredCloneCompat(found.model.catalog_json),
+    scans: initialScans,
+    audit: [audit('model_created', `Forked from "${found.model.name}"`)],
+    created_at: created,
+    updated_at: created,
+  }
+  const next = mapFolder(state, found.library.id, found.folder.id, (fld) => ({
+    ...fld,
+    models: [...fld.models, fork],
+  }))
+  return { state: next, modelId: newId }
+}
+
+function structuredCloneCompat<T>(v: T): T {
+  if (typeof structuredClone === 'function') return structuredClone(v)
+  return JSON.parse(JSON.stringify(v))
+}
+
 export function deleteModel(state: MartState, modelId: string): MartState {
   return {
     ...state,

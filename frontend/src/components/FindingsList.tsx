@@ -3,6 +3,12 @@ import type { Dimension, Finding, Severity } from '../types'
 
 interface Props {
   findings: Finding[]
+  // Optional: pass to enable per-finding Fix buttons. Receives the rule_id +
+  // target_obj_id; parent owns the catalog + persistence.
+  onFix?: (ruleId: string, targetObjId: number) => Promise<void> | void
+  onFixAll?: () => Promise<void> | void
+  fixing?: boolean             // disables buttons while a fix is in flight
+  fixingTarget?: { ruleId: string; targetObjId: number } | null
 }
 
 const SEV_BADGE: Record<Severity, string> = {
@@ -28,9 +34,19 @@ const SEV_ORDER: Record<Severity, number> = {
 
 const ALL_SEVS: Severity[] = ['critical', 'error', 'warn', 'info']
 
-export default function FindingsList({ findings }: Props) {
+export default function FindingsList({
+  findings,
+  onFix,
+  onFixAll,
+  fixing = false,
+  fixingTarget = null,
+}: Props) {
   const [sevFilter, setSevFilter] = useState<Set<Severity>>(new Set())
   const [dimFilter, setDimFilter] = useState<Set<Dimension>>(new Set())
+  const fixableCount = useMemo(
+    () => findings.filter((f) => f.fixable).length,
+    [findings]
+  )
 
   // Active dimensions are derived from findings — only show chips for
   // dimensions that actually have findings to filter.
@@ -83,21 +99,32 @@ export default function FindingsList({ findings }: Props) {
 
   return (
     <div className="rounded-2xl bg-white border border-slate-200 p-6 shadow-sm">
-      <div className="flex items-baseline justify-between mb-1">
+      <div className="flex items-baseline justify-between mb-1 gap-3">
         <h3 className="text-sm font-semibold text-slate-700">
           Findings ({totalShown}{totalShown !== totalAll && <span className="text-slate-400"> / {totalAll}</span>})
         </h3>
-        {(sevFilter.size > 0 || dimFilter.size > 0) && (
-          <button
-            onClick={() => {
-              setSevFilter(new Set())
-              setDimFilter(new Set())
-            }}
-            className="text-xs text-slate-500 hover:text-slate-800 transition-colors"
-          >
-            Clear filters
-          </button>
-        )}
+        <div className="flex items-center gap-3 shrink-0">
+          {(sevFilter.size > 0 || dimFilter.size > 0) && (
+            <button
+              onClick={() => {
+                setSevFilter(new Set())
+                setDimFilter(new Set())
+              }}
+              className="text-xs text-slate-500 hover:text-slate-800 transition-colors"
+            >
+              Clear filters
+            </button>
+          )}
+          {onFixAll && fixableCount > 0 && (
+            <button
+              onClick={() => void onFixAll()}
+              disabled={fixing}
+              className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-wait transition-colors shadow-sm"
+            >
+              {fixing ? 'Fixing…' : `Fix all auto-fixable (${fixableCount})`}
+            </button>
+          )}
+        </div>
       </div>
       <p className="text-xs text-slate-500 mb-4">
         Grouped by dimension · sorted by severity
@@ -178,32 +205,48 @@ export default function FindingsList({ findings }: Props) {
                 </svg>
               </summary>
               <ul className="border-t border-slate-100">
-                {items.map((f, i) => (
-                  <li
-                    key={i}
-                    className="flex gap-3 px-4 py-3 border-t border-slate-100 first:border-t-0"
-                  >
-                    <span
-                      className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded ring-1 ring-inset text-[10px] font-bold uppercase tracking-wider h-fit mt-0.5 ${SEV_BADGE[f.severity]}`}
+                {items.map((f, i) => {
+                  const isThisFixing =
+                    fixing &&
+                    fixingTarget?.ruleId === f.rule_id &&
+                    fixingTarget?.targetObjId === f.target_obj_id
+                  return (
+                    <li
+                      key={i}
+                      className="flex gap-3 px-4 py-3 border-t border-slate-100 first:border-t-0"
                     >
-                      {f.severity}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      {f.target_name && (
-                        <p className="text-[11px] font-mono text-slate-500 mb-0.5">
-                          {f.target_name}
-                        </p>
+                      <span
+                        className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded ring-1 ring-inset text-[10px] font-bold uppercase tracking-wider h-fit mt-0.5 ${SEV_BADGE[f.severity]}`}
+                      >
+                        {f.severity}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        {f.target_name && (
+                          <p className="text-[11px] font-mono text-slate-500 mb-0.5">
+                            {f.target_name}
+                          </p>
+                        )}
+                        <p className="text-sm text-slate-900 leading-relaxed">{f.message}</p>
+                        {f.remediation && (
+                          <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                            → {f.remediation}
+                          </p>
+                        )}
+                        <p className="text-[10px] font-mono text-slate-400 mt-1">{f.rule_id}</p>
+                      </div>
+                      {f.fixable && onFix && (
+                        <button
+                          onClick={() => void onFix(f.rule_id, f.target_obj_id)}
+                          disabled={fixing}
+                          title="Apply auto-fix"
+                          className="shrink-0 self-start rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-wait transition-colors"
+                        >
+                          {isThisFixing ? 'Fixing…' : 'Fix'}
+                        </button>
                       )}
-                      <p className="text-sm text-slate-900 leading-relaxed">{f.message}</p>
-                      {f.remediation && (
-                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                          → {f.remediation}
-                        </p>
-                      )}
-                      <p className="text-[10px] font-mono text-slate-400 mt-1">{f.rule_id}</p>
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  )
+                })}
               </ul>
             </details>
           ))}
