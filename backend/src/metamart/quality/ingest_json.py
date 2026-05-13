@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from metamart.quality.adapters import normalize_catalog
 from metamart.quality.catalog import (
     Attribute,
     CatalogSnapshot,
@@ -24,19 +25,30 @@ from metamart.quality.catalog import (
 def catalog_from_json(data: dict[str, Any]) -> CatalogSnapshot:
     """Convert a JSON catalog spec to a `CatalogSnapshot`.
 
-    Required: `entities` (a list). `name` defaults to "Untitled Model" and
-    `model_type` defaults to "physical" so a partial catalog still scores.
-    Each entity needs `id`, `logical_name`, `physical_name`.
-    Each attribute needs `id`, `physical_name`, `data_type`.
+    First passes the input through `normalize_catalog` to handle foreign
+    shapes (erwin DM exports, generic tables/columns dumps). Then expects
+    the native shape: `entities` (a list of entity objects).
+
+    Required after normalization: `entities`. `name` defaults to "Untitled
+    Model" and `model_type` defaults to "physical".
     """
+    # Try to recognize and normalize common foreign shapes (erwin etc).
+    data = normalize_catalog(data)
+
     if not isinstance(data, dict):
         raise ValueError(
             "catalog must be a JSON object — see backend/seed_data/*.json for shape"
         )
     if "entities" not in data:
+        # Surface the top-level keys so the user can see what we saw — much
+        # more actionable than "no entities".
+        keys = list(data.keys())[:10]
         raise ValueError(
-            "catalog has no 'entities' list — nothing to score. "
-            "Expected shape: {name, model_type, entities: [...]}"
+            "catalog has no 'entities' list and didn't match a known foreign shape "
+            f"(saw top-level keys: {keys}). Expected MetaMart-native "
+            "{name, model_type, entities: [...]}, an erwin-style "
+            "{Entities: [...], Relationships: [...]}, or a generic "
+            "{tables: [{name, columns: [...]}]}."
         )
     if not isinstance(data["entities"], list):
         raise ValueError(
