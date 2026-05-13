@@ -1,40 +1,96 @@
 """Normalize various JSON catalog shapes into MetaMart's native format.
 
-Handles:
-- Native MetaMart shape (passthrough): `{name, model_type, entities: [...]}`
-- erwin Data Modeler exports (PascalCase keys, `Entities`/`Attributes`)
-- Generic SQL-ish dumps: `{tables: [{name, columns: [...]}]}`
+Detection cascade (most specific → most general):
+  1. Native MetaMart shape — passthrough.
+  2. erwin Data Modeler exports — PascalCase keys, `Entities`/`Attributes`.
+  3. Generic SQL-ish dumps — `{tables: [{name, columns: [...]}]}`.
+  4. dbt manifest.json — `{metadata, nodes: {id: {columns: {...}}}}`.
+  5. erwin DAS-style polymorphic — `{objects: [{type: "Entity"|"Relationship"}]}`.
+  6. OpenAPI / JSON Schema — `{components: {schemas: {Name: {properties: ...}}}}`.
+  7. Generic recursive walker — finds any dict with a name + column-like collection.
 
-Any shape not detected here passes through unchanged — `catalog_from_json`
-will then raise its own informative error.
+Anything that still doesn't match falls through and `catalog_from_json` raises
+an informative error listing the actual top-level keys seen.
 """
 from __future__ import annotations
 
 from typing import Any
 
+# ── shared name pools ─────────────────────────────────────────
+
+_NAME_KEYS = (
+    "name", "Name",
+    "tableName", "TableName",
+    "EntityName", "entityName",
+    "label", "title",
+)
+_PHYSICAL_NAME_KEYS = (
+    "PhysicalName", "physicalName",
+    "TableName", "tableName",
+    "ColumnName", "columnName",
+)
+_LOGICAL_NAME_KEYS = (
+    "LogicalName", "logicalName",
+    "DisplayName", "displayName",
+    "Label", "label",
+)
+_ATTR_COLLECTION_KEYS = (
+    "attributes", "Attributes",
+    "columns", "Columns",
+    "fields", "Fields",
+    "properties", "Properties",
+    "Attribute", "Column",
+)
+_DATATYPE_KEYS = (
+    "DataType", "dataType", "data_type",
+    "Type", "type",
+    "Datatype", "datatype",
+    "PhysicalDataType", "physicalDataType",
+)
+_NULLABLE_NEG_KEYS = ("NotNull", "notNull", "IsNotNull", "isNotNull", "Required", "required")
+_NULLABLE_POS_KEYS = ("Nullable", "nullable", "IsNullable", "isNullable")
+_PK_FLAG_KEYS = (
+    "IsPK", "isPK", "isPk",
+    "IsPrimaryKey", "isPrimaryKey",
+    "PrimaryKey", "primary_key", "primaryKey",
+    "pk",
+)
+
+
+# ── top-level entry point ─────────────────────────────────────
 
 def normalize_catalog(data: Any) -> Any:
     """Convert known foreign shapes to native catalog format. Idempotent."""
     if not isinstance(data, dict):
         return data
-    # Already native
     if "entities" in data and isinstance(data["entities"], list):
         return data
     if _looks_like_erwin(data):
         return _adapt_erwin(data)
     if "tables" in data and isinstance(data["tables"], list):
         return _adapt_tables(data)
+    if _looks_like_dbt(data):
+        return _adapt_dbt(data)
+    if _looks_like_polymorphic(data):
+        return _adapt_polymorphic_objects(data)
+    if _looks_like_openapi(data):
+        return _adapt_openapi(data)
+
+    # Last resort: walk the tree looking for entity-shaped dicts anywhere.
+    discovered = _walk_for_entities(data)
+    if discovered:
+        return {
+            "name": _g(data, "name", "Name", "title", "Title", default="Auto-detected model"),
+            "model_type": "physical",
+            "entities": discovered,
+        }
     return data
 
 
 # ── helpers ──────────────────────────────────────────────────
 
 def _g(d: Any, *keys: str, default: Any = None) -> Any:
-    """Pick the first non-None value among the given keys (case variations).
-
-    Useful for normalizing PascalCase / camelCase / snake_case field names
-    found in different JSON exports.
-    """
+    """First non-None value among the given keys (case variations)."""
     if not isinstance(d, dict):
         return default
     for k in keys:
@@ -43,7 +99,7 @@ def _g(d: Any, *keys: str, default: Any = None) -> Any:
     return default
 
 
-def _slug(name: str | None) -> str:
+def _slug(name: Any) -> str:
     if not name:
         return "unknown"
     return (
@@ -52,25 +108,31 @@ def _slug(name: str | None) -> str:
         .replace(" ", "_")
         .replace("-", "_")
         .replace(".", "_")
+        .replace("/", "_")
     )
 
 
 def _entity_id_from_ref(ref: Any) -> str:
     if isinstance(ref, dict):
-        name = _g(ref, "Name", "name", "EntityName", "entityName", "PhysicalName")
-        return f"e_{_slug(name)}"
+        return f"e_{_slug(_g(ref, *_NAME_KEYS, *_PHYSICAL_NAME_KEYS))}"
     return f"e_{_slug(str(ref))}"
 
 
-# ── erwin adapter ────────────────────────────────────────────
+def _resolve_nullable(a: dict) -> bool:
+    if _g(a, *_NULLABLE_NEG_KEYS) is True:
+        return False
+    if _g(a, *_NULLABLE_POS_KEYS) is False:
+        return False
+    return True
+
+
+# ── erwin adapter (PascalCase Entities/Attributes) ───────────
 
 def _looks_like_erwin(data: dict) -> bool:
-    indicators = ["Entities", "ERwinModel", "erwinModel", "DataModel", "Entity"]
-    return any(k in data for k in indicators)
+    return any(k in data for k in ("Entities", "ERwinModel", "erwinModel", "DataModel", "Entity"))
 
 
 def _adapt_erwin(data: dict) -> dict[str, Any]:
-    """erwin DM JSON → native catalog. Tolerates several common key variations."""
     model_block = _g(data, "Model", "ERwinModel", "erwinModel", "DataModel", default={})
     model_name = (
         _g(data, "Name", "ModelName", "name", "modelName")
@@ -79,16 +141,7 @@ def _adapt_erwin(data: dict) -> dict[str, Any]:
 
     raw_entities = (
         _g(data, "Entities", "Tables", "entities", "tables", "Entity")
-        or _g(
-            model_block,
-            "Entity",
-            "Entities",
-            "Table",
-            "Tables",
-            "entity",
-            "entities",
-            default=[],
-        )
+        or _g(model_block, "Entity", "Entities", "Table", "Tables", "entity", "entities", default=[])
     )
     if not isinstance(raw_entities, list):
         raw_entities = []
@@ -130,82 +183,23 @@ def _adapt_erwin(data: dict) -> dict[str, Any]:
 
 
 def _adapt_erwin_entity(e: dict, idx: int) -> dict[str, Any]:
-    logical = _g(
-        e,
-        "LogicalName",
-        "logicalName",
-        "Name",
-        "name",
-        "EntityName",
-        "entityName",
-        default=f"Entity{idx}",
-    )
-    physical = _g(
-        e,
-        "PhysicalName",
-        "physicalName",
-        "TableName",
-        "tableName",
-        "Name",
-        "name",
-        default=logical,
-    )
+    logical = _g(e, *_LOGICAL_NAME_KEYS, *_NAME_KEYS, default=f"Entity{idx}")
+    physical = _g(e, *_PHYSICAL_NAME_KEYS, *_NAME_KEYS, default=logical)
     e_id = f"e_{_slug(physical or logical)}_{idx}"
 
-    raw_attrs = _g(
-        e, "Attributes", "Columns", "attributes", "columns", "Attribute", "Column", default=[]
-    )
+    raw_attrs = _g(e, *_ATTR_COLLECTION_KEYS, default=[])
     if not isinstance(raw_attrs, list):
         raw_attrs = []
 
     attributes: list[dict[str, Any]] = []
     pk_attr_ids: list[str] = []
-    pk_attr_names: list[str] = []  # parallel: physical names for matching against explicit Keys block
-
     for j, a in enumerate(raw_attrs):
         if not isinstance(a, dict):
             continue
-        a_logical = _g(
-            a,
-            "LogicalName",
-            "logicalName",
-            "Name",
-            "name",
-            "AttributeName",
-            "attributeName",
-            default=f"attr_{j}",
-        )
-        a_physical = _g(
-            a,
-            "PhysicalName",
-            "physicalName",
-            "ColumnName",
-            "columnName",
-            "Name",
-            "name",
-            default=a_logical,
-        )
-        a_type = _g(
-            a,
-            "DataType",
-            "dataType",
-            "Type",
-            "type",
-            "Datatype",
-            "datatype",
-            "PhysicalDataType",
-            default="VARCHAR(255)",
-        )
-
-        # Nullability: try positive (NotNull/Required) and negative (Nullable=false) flags.
-        is_nullable = True
-        not_null_flag = _g(a, "NotNull", "notNull", "IsNotNull", "isNotNull", "Required", "required")
-        if not_null_flag is True:
-            is_nullable = False
-        nullable_flag = _g(a, "Nullable", "nullable", "IsNullable", "isNullable")
-        if nullable_flag is False:
-            is_nullable = False
-
+        a_logical = _g(a, *_LOGICAL_NAME_KEYS, *_NAME_KEYS, default=f"attr_{j}")
+        a_physical = _g(a, *_PHYSICAL_NAME_KEYS, *_NAME_KEYS, default=a_logical)
+        a_type = _g(a, *_DATATYPE_KEYS, default="VARCHAR(255)")
+        is_nullable = _resolve_nullable(a)
         a_id = f"{e_id}_a{j}"
         attributes.append(
             {
@@ -217,14 +211,9 @@ def _adapt_erwin_entity(e: dict, idx: int) -> dict[str, Any]:
                 "position": j + 1,
             }
         )
-
-        is_pk = (
-            _g(a, "IsPK", "isPK", "isPk", "IsPrimaryKey", "primary_key", "primaryKey", "PrimaryKey")
-            or str(_g(a, "Key", default="")).upper() == "PK"
-        )
+        is_pk = _g(a, *_PK_FLAG_KEYS) or str(_g(a, "Key", default="")).upper() == "PK"
         if is_pk:
             pk_attr_ids.append(a_id)
-            pk_attr_names.append(str(a_physical))
 
     keys: list[dict[str, Any]] = []
     if pk_attr_ids:
@@ -237,7 +226,6 @@ def _adapt_erwin_entity(e: dict, idx: int) -> dict[str, Any]:
             }
         )
 
-    # Also handle an explicit Keys block (erwin sometimes records PKs there only).
     raw_keys = _g(e, "Keys", "keys", default=[])
     if not isinstance(raw_keys, list):
         raw_keys = []
@@ -248,17 +236,13 @@ def _adapt_erwin_entity(e: dict, idx: int) -> dict[str, Any]:
         if k_type not in ("PK", "AK", "IE"):
             continue
         if k_type == "PK" and pk_attr_ids:
-            continue  # already captured above
+            continue
         member_refs = _g(k, "Members", "members", "Attributes", "attributes", default=[])
         if not isinstance(member_refs, list):
             continue
         member_ids: list[str] = []
         for mref in member_refs:
-            if isinstance(mref, dict):
-                mref_name = _g(mref, "Name", "name", "PhysicalName", "physicalName")
-            else:
-                mref_name = mref
-            # Resolve by physical name match
+            mref_name = _g(mref, "Name", "name", "PhysicalName", "physicalName") if isinstance(mref, dict) else mref
             for attr_dict in attributes:
                 if attr_dict["physical_name"] == mref_name or attr_dict["logical_name"] == mref_name:
                     member_ids.append(attr_dict["id"])
@@ -285,17 +269,16 @@ def _adapt_erwin_entity(e: dict, idx: int) -> dict[str, Any]:
 # ── generic tables/columns adapter ───────────────────────────
 
 def _adapt_tables(data: dict) -> dict[str, Any]:
-    """Map `{tables: [{name, columns: [...]}]}` to native shape."""
     tables = data.get("tables") or []
     entities: list[dict[str, Any]] = []
 
     for i, t in enumerate(tables):
         if not isinstance(t, dict):
             continue
-        t_name = _g(t, "name", "table_name", "tableName", "Name", default=f"table_{i}")
+        t_name = _g(t, *_NAME_KEYS, default=f"table_{i}")
         e_id = f"e_{_slug(t_name)}_{i}"
 
-        cols = _g(t, "columns", "Columns", "fields", "Fields", default=[])
+        cols = _g(t, *_ATTR_COLLECTION_KEYS, default=[])
         if not isinstance(cols, list):
             cols = []
 
@@ -304,12 +287,9 @@ def _adapt_tables(data: dict) -> dict[str, Any]:
         for j, c in enumerate(cols):
             if not isinstance(c, dict):
                 continue
-            c_name = _g(c, "name", "column_name", "columnName", "Name", default=f"col_{j}")
-            c_type = _g(c, "type", "data_type", "dataType", "DataType", default="VARCHAR(255)")
-            c_nullable = _g(c, "nullable", "Nullable", "is_nullable", default=True)
-            if _g(c, "not_null", "NotNull", "required") is True:
-                c_nullable = False
-
+            c_name = _g(c, *_NAME_KEYS, *_PHYSICAL_NAME_KEYS, default=f"col_{j}")
+            c_type = _g(c, *_DATATYPE_KEYS, default="VARCHAR(255)")
+            c_nullable = _resolve_nullable(c)
             a_id = f"{e_id}_a{j}"
             attributes.append(
                 {
@@ -317,45 +297,29 @@ def _adapt_tables(data: dict) -> dict[str, Any]:
                     "logical_name": str(c_name),
                     "physical_name": str(c_name),
                     "data_type": str(c_type),
-                    "is_nullable": bool(c_nullable),
+                    "is_nullable": c_nullable,
                     "position": j + 1,
                 }
             )
-            if _g(c, "primary_key", "primaryKey", "is_pk", "pk", "isPk"):
+            if _g(c, *_PK_FLAG_KEYS):
                 pk_attr_ids.append(a_id)
 
         keys: list[dict[str, Any]] = []
         if pk_attr_ids:
-            keys.append(
-                {
-                    "id": f"{e_id}_pk",
-                    "name": f"pk_{t_name}",
-                    "key_type": "PK",
-                    "members": pk_attr_ids,
-                }
-            )
+            keys.append({"id": f"{e_id}_pk", "name": f"pk_{t_name}", "key_type": "PK", "members": pk_attr_ids})
         else:
-            # Table-level PK declaration (`primary_key: ["col_a", "col_b"]`)
             tbl_pk = _g(t, "primary_key", "primaryKey", "pk")
-            if tbl_pk:
-                if isinstance(tbl_pk, str):
-                    tbl_pk = [tbl_pk]
-                if isinstance(tbl_pk, list):
-                    member_ids = []
-                    for pk_col_name in tbl_pk:
-                        for attr in attributes:
-                            if attr["physical_name"] == pk_col_name:
-                                member_ids.append(attr["id"])
-                                break
-                    if member_ids:
-                        keys.append(
-                            {
-                                "id": f"{e_id}_pk",
-                                "name": f"pk_{t_name}",
-                                "key_type": "PK",
-                                "members": member_ids,
-                            }
-                        )
+            if isinstance(tbl_pk, str):
+                tbl_pk = [tbl_pk]
+            if isinstance(tbl_pk, list):
+                member_ids = []
+                for pk_col_name in tbl_pk:
+                    for attr in attributes:
+                        if attr["physical_name"] == pk_col_name:
+                            member_ids.append(attr["id"])
+                            break
+                if member_ids:
+                    keys.append({"id": f"{e_id}_pk", "name": f"pk_{t_name}", "key_type": "PK", "members": member_ids})
 
         entities.append(
             {
@@ -371,4 +335,340 @@ def _adapt_tables(data: dict) -> dict[str, Any]:
         "name": data.get("name") or "Imported Tables",
         "model_type": "physical",
         "entities": entities,
+    }
+
+
+# ── dbt manifest.json adapter ────────────────────────────────
+
+def _looks_like_dbt(data: dict) -> bool:
+    return (
+        ("nodes" in data and isinstance(data["nodes"], dict))
+        or ("sources" in data and isinstance(data["sources"], dict))
+    )
+
+
+def _adapt_dbt(data: dict) -> dict[str, Any]:
+    pool: dict[str, Any] = {}
+    pool.update(data.get("sources") or {})
+    pool.update(data.get("nodes") or {})
+
+    entities: list[dict[str, Any]] = []
+    for i, (node_id, node) in enumerate(pool.items()):
+        if not isinstance(node, dict):
+            continue
+        resource_type = node.get("resource_type")
+        if resource_type not in (None, "model", "source", "seed", "snapshot"):
+            continue
+
+        e_name = node.get("name") or str(node_id).split(".")[-1]
+        e_id = f"e_{_slug(e_name)}_{i}"
+
+        cols = node.get("columns", {})
+        attributes: list[dict[str, Any]] = []
+        if isinstance(cols, dict):
+            for j, (col_name, col) in enumerate(cols.items()):
+                if not isinstance(col, dict):
+                    continue
+                attributes.append(
+                    {
+                        "id": f"{e_id}_a{j}",
+                        "logical_name": col.get("name") or col_name,
+                        "physical_name": col.get("name") or col_name,
+                        "data_type": col.get("data_type") or "VARCHAR(255)",
+                        "is_nullable": True,
+                        "position": j + 1,
+                    }
+                )
+
+        entities.append(
+            {
+                "id": e_id,
+                "logical_name": e_name,
+                "physical_name": e_name,
+                "attributes": attributes,
+                "keys": [],
+            }
+        )
+
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    return {
+        "name": metadata.get("project_name") or "dbt manifest",
+        "model_type": "physical",
+        "entities": entities,
+    }
+
+
+# ── polymorphic objects adapter (erwin DAS-like) ─────────────
+
+def _looks_like_polymorphic(data: dict) -> bool:
+    objs = data.get("objects")
+    if not isinstance(objs, list) or not objs:
+        return False
+    return any(isinstance(o, dict) and "type" in o for o in objs[:5])
+
+
+def _adapt_polymorphic_objects(data: dict) -> dict[str, Any]:
+    objs = data.get("objects", [])
+    entities: list[dict[str, Any]] = []
+    relationships: list[dict[str, Any]] = []
+    name_to_id: dict[str, str] = {}
+
+    for i, obj in enumerate(objs):
+        if not isinstance(obj, dict):
+            continue
+        obj_type = str(obj.get("type", "")).lower()
+
+        if obj_type in ("entity", "table"):
+            e_name = _g(obj, *_NAME_KEYS, default=f"entity_{i}")
+            e_physical = _g(obj, *_PHYSICAL_NAME_KEYS, default=e_name)
+            e_id = f"e_{_slug(e_physical)}_{i}"
+            name_to_id[e_name] = e_id
+
+            raw_props = _g(obj, *_ATTR_COLLECTION_KEYS, default={})
+            attributes: list[dict[str, Any]] = []
+
+            if isinstance(raw_props, dict):
+                for j, (col_key, c) in enumerate(raw_props.items()):
+                    attr = _attr_from_value(col_key, c, f"{e_id}_a{j}", j)
+                    if attr is not None:
+                        attributes.append(attr)
+            elif isinstance(raw_props, list):
+                for j, c in enumerate(raw_props):
+                    if not isinstance(c, dict):
+                        continue
+                    attr = _attr_from_value(_g(c, *_NAME_KEYS, default=f"col_{j}"), c, f"{e_id}_a{j}", j)
+                    if attr is not None:
+                        attributes.append(attr)
+
+            entities.append(
+                {
+                    "id": e_id,
+                    "logical_name": str(e_name),
+                    "physical_name": str(e_physical),
+                    "attributes": attributes,
+                    "keys": [],
+                }
+            )
+
+        elif obj_type in ("relationship", "fk"):
+            parent_ref = _g(obj, "parent", "Parent", "from", "From", "ParentEntity")
+            child_ref = _g(obj, "child", "Child", "to", "To", "ChildEntity")
+            if not parent_ref or not child_ref:
+                continue
+            relationships.append(
+                {
+                    "id": f"r{i}",
+                    "name": _g(obj, *_NAME_KEYS),
+                    "parent": name_to_id.get(str(parent_ref), _entity_id_from_ref(parent_ref)),
+                    "child": name_to_id.get(str(child_ref), _entity_id_from_ref(child_ref)),
+                }
+            )
+
+    return {
+        "name": _g(data, *_NAME_KEYS, default="Polymorphic objects import"),
+        "model_type": "physical",
+        "entities": entities,
+        "relationships": relationships,
+    }
+
+
+def _attr_from_value(name_hint: Any, value: Any, attr_id: str, j: int) -> dict[str, Any] | None:
+    """Build one attribute dict from a (name, value-or-dict) pair."""
+    if isinstance(value, dict):
+        a_name = _g(value, *_NAME_KEYS, *_PHYSICAL_NAME_KEYS) or name_hint
+        a_type = _g(value, *_DATATYPE_KEYS, default="VARCHAR(255)")
+        a_nullable = _resolve_nullable(value)
+    else:
+        a_name = name_hint
+        a_type = str(value) if value else "VARCHAR(255)"
+        a_nullable = True
+    if not a_name:
+        return None
+    return {
+        "id": attr_id,
+        "logical_name": str(a_name),
+        "physical_name": str(a_name),
+        "data_type": str(a_type),
+        "is_nullable": bool(a_nullable),
+        "position": j + 1,
+    }
+
+
+# ── OpenAPI / JSON Schema adapter ────────────────────────────
+
+def _looks_like_openapi(data: dict) -> bool:
+    if "openapi" in data or "swagger" in data:
+        return True
+    if "components" in data and isinstance(data.get("components"), dict):
+        schemas = data["components"].get("schemas")
+        if isinstance(schemas, dict):
+            return True
+    if "definitions" in data and isinstance(data["definitions"], dict):
+        return True  # Swagger 2 / JSON Schema draft
+    if data.get("type") == "object" and isinstance(data.get("properties"), dict):
+        return True
+    return False
+
+
+def _adapt_openapi(data: dict) -> dict[str, Any]:
+    schemas: dict[str, Any] = {}
+    if isinstance(data.get("components"), dict):
+        schemas.update(data["components"].get("schemas") or {})
+    if isinstance(data.get("definitions"), dict):
+        schemas.update(data["definitions"])
+    if not schemas and data.get("type") == "object":
+        schemas[data.get("title", "Schema")] = data
+
+    entities: list[dict[str, Any]] = []
+    for i, (schema_name, schema) in enumerate(schemas.items()):
+        if not isinstance(schema, dict):
+            continue
+        if schema.get("type") not in (None, "object"):
+            continue
+
+        props = schema.get("properties", {})
+        if not isinstance(props, dict):
+            continue
+        required = set(schema.get("required") or [])
+        e_id = f"e_{_slug(schema_name)}_{i}"
+
+        attributes: list[dict[str, Any]] = []
+        for j, (prop_name, prop) in enumerate(props.items()):
+            if not isinstance(prop, dict):
+                continue
+            attributes.append(
+                {
+                    "id": f"{e_id}_a{j}",
+                    "logical_name": prop_name,
+                    "physical_name": prop_name,
+                    "data_type": _openapi_type(prop),
+                    "is_nullable": prop_name not in required,
+                    "position": j + 1,
+                }
+            )
+
+        entities.append(
+            {
+                "id": e_id,
+                "logical_name": str(schema_name),
+                "physical_name": _slug(schema_name),
+                "attributes": attributes,
+                "keys": [],
+            }
+        )
+
+    info = data.get("info") if isinstance(data.get("info"), dict) else {}
+    return {
+        "name": info.get("title") or "OpenAPI import",
+        "model_type": "logical",
+        "entities": entities,
+    }
+
+
+def _openapi_type(prop: dict) -> str:
+    t = prop.get("type", "object")
+    fmt = prop.get("format", "")
+    if t == "integer":
+        return "BIGINT" if fmt == "int64" else "INTEGER"
+    if t == "number":
+        return "NUMERIC"
+    if t == "boolean":
+        return "BOOLEAN"
+    if t == "string":
+        if fmt == "date-time":
+            return "TIMESTAMPTZ"
+        if fmt == "date":
+            return "DATE"
+        if fmt == "uuid":
+            return "UUID"
+        return "VARCHAR(255)"
+    if t == "array":
+        return "ARRAY"
+    return "JSONB"
+
+
+# ── generic recursive walker (last resort) ───────────────────
+
+def _has_name(obj: dict) -> bool:
+    return any(k in obj for k in _NAME_KEYS + _PHYSICAL_NAME_KEYS)
+
+
+def _has_attr_collection(obj: dict) -> bool:
+    for k in _ATTR_COLLECTION_KEYS:
+        if k in obj:
+            coll = obj[k]
+            if isinstance(coll, list) and coll and any(isinstance(x, dict) for x in coll):
+                return True
+            if isinstance(coll, dict) and coll:
+                return True
+    return False
+
+
+def _walk_for_entities(
+    data: Any,
+    key_hint: str = "",
+    max_depth: int = 6,
+    seen_physicals: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Best-effort: find any dict with a name + column-like collection."""
+    if seen_physicals is None:
+        seen_physicals = set()
+    if max_depth <= 0:
+        return []
+    out: list[dict[str, Any]] = []
+
+    if isinstance(data, dict):
+        if _has_attr_collection(data) and (_has_name(data) or key_hint):
+            extracted = _extract_entity(data, key_hint, idx=len(seen_physicals))
+            if extracted["physical_name"] not in seen_physicals:
+                seen_physicals.add(extracted["physical_name"])
+                out.append(extracted)
+            return out  # don't recurse INTO an entity
+        for k, v in data.items():
+            out.extend(_walk_for_entities(v, k, max_depth - 1, seen_physicals))
+    elif isinstance(data, list):
+        for item in data:
+            out.extend(_walk_for_entities(item, key_hint, max_depth - 1, seen_physicals))
+    return out
+
+
+def _extract_entity(obj: dict, key_hint: str, idx: int) -> dict[str, Any]:
+    name = _g(obj, *_NAME_KEYS) or key_hint or f"entity_{idx}"
+    physical = _g(obj, *_PHYSICAL_NAME_KEYS) or name
+    e_id = f"e_{_slug(physical)}_{idx}"
+
+    cols: Any = []
+    for k in _ATTR_COLLECTION_KEYS:
+        if k in obj:
+            cols = obj[k]
+            break
+
+    attributes: list[dict[str, Any]] = []
+    if isinstance(cols, list):
+        for j, c in enumerate(cols):
+            if not isinstance(c, dict):
+                continue
+            c_name = _g(c, *_NAME_KEYS, *_PHYSICAL_NAME_KEYS, default=f"col_{j}")
+            attributes.append(
+                {
+                    "id": f"{e_id}_a{j}",
+                    "logical_name": str(c_name),
+                    "physical_name": str(c_name),
+                    "data_type": str(_g(c, *_DATATYPE_KEYS, default="VARCHAR(255)")),
+                    "is_nullable": _resolve_nullable(c),
+                    "position": j + 1,
+                }
+            )
+    elif isinstance(cols, dict):
+        for j, (col_key, c) in enumerate(cols.items()):
+            attr = _attr_from_value(col_key, c, f"{e_id}_a{j}", j)
+            if attr is not None:
+                attributes.append(attr)
+
+    return {
+        "id": e_id,
+        "logical_name": str(name),
+        "physical_name": str(physical),
+        "attributes": attributes,
+        "keys": [],
     }
