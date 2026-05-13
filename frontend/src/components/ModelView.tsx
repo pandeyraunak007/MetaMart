@@ -14,6 +14,10 @@ interface Props {
   rescoring: boolean
   fixing: boolean
   fixingTarget: { ruleId: string; targetObjId: number } | null
+  // The latest fix the user applied (Fix or Fix-all). Drives the post-fix
+  // banner above the findings list with a prominent Download button.
+  lastFix: { count: number; description: string } | null
+  onDismissLastFix: () => void
   onRescore: () => void
   onRename: (name: string) => void
   onDelete: () => void
@@ -27,6 +31,8 @@ export default function ModelView({
   rescoring,
   fixing,
   fixingTarget,
+  lastFix,
+  onDismissLastFix,
   onRescore,
   onRename,
   onDelete,
@@ -36,6 +42,7 @@ export default function ModelView({
 }: Props) {
   const [tab, setTab] = useState<Tab>('score')
   const last = latestScan(model)
+  const fixCount = countFixes(model)
 
   function handleDownload() {
     const json = JSON.stringify(model.catalog_json, null, 2)
@@ -49,6 +56,9 @@ export default function ModelView({
     a.click()
     a.remove()
     URL.revokeObjectURL(url)
+    // Once they've downloaded, they've acted on the post-fix banner — drop it
+    // so it doesn't keep nagging through subsequent unrelated edits.
+    onDismissLastFix()
   }
 
   function handleFork() {
@@ -65,8 +75,17 @@ export default function ModelView({
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
               Model
             </p>
-            <h1 className="text-2xl font-semibold text-slate-900 truncate mt-0.5">
-              {model.name}
+            <h1 className="text-2xl font-semibold text-slate-900 truncate mt-0.5 flex items-center gap-2.5">
+              <span className="truncate">{model.name}</span>
+              {fixCount > 0 && (
+                <span
+                  title={`This model has been auto-fixed ${fixCount} time${fixCount === 1 ? '' : 's'}. Use "Save as copy" to keep the original.`}
+                  className="shrink-0 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200"
+                >
+                  <span className="text-emerald-500">●</span>
+                  +{fixCount} fix{fixCount === 1 ? '' : 'es'}
+                </span>
+              )}
             </h1>
             <p className="text-xs text-slate-500 mt-1">
               Created {fmtDate(model.created_at)}
@@ -79,10 +98,11 @@ export default function ModelView({
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={handleDownload}
-              title="Download the (possibly fixed) model JSON"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+              title="Download the current saved JSON. Includes any auto-fixes you've applied."
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:border-slate-300 hover:bg-slate-50 inline-flex items-center gap-1.5"
             >
-              Download JSON
+              <DownloadIcon />
+              Download <span className="text-slate-400 font-normal">(latest)</span>
             </button>
             <button
               onClick={handleFork}
@@ -152,6 +172,10 @@ export default function ModelView({
               onFixAll={onFixAll}
               fixing={fixing}
               fixingTarget={fixingTarget}
+              lastFix={lastFix}
+              onDownload={handleDownload}
+              onDismissLastFix={onDismissLastFix}
+              onOpenAudit={() => setTab('audit')}
             />
           ) : (
             <EmptyMsg text="No score yet. Click Re-score above." />
@@ -196,6 +220,10 @@ function ScoreTab({
   onFixAll,
   fixing,
   fixingTarget,
+  lastFix,
+  onDownload,
+  onDismissLastFix,
+  onOpenAudit,
 }: {
   modelName: string
   result: import('../types').ScanResult
@@ -203,6 +231,10 @@ function ScoreTab({
   onFixAll: () => Promise<void> | void
   fixing: boolean
   fixingTarget: { ruleId: string; targetObjId: number } | null
+  lastFix: { count: number; description: string } | null
+  onDownload: () => void
+  onDismissLastFix: () => void
+  onOpenAudit: () => void
 }) {
   return (
     <div className="space-y-6">
@@ -211,6 +243,16 @@ function ScoreTab({
         <RadarPanel subScores={result.sub_scores} />
         <SubScoreList subScores={result.sub_scores} />
       </div>
+      {lastFix && (
+        <PostFixBanner
+          fix={lastFix}
+          grade={result.grade}
+          composite={result.composite_score}
+          onDownload={onDownload}
+          onDismiss={onDismissLastFix}
+          onOpenAudit={onOpenAudit}
+        />
+      )}
       <FindingsList
         findings={result.findings}
         onFix={onFix}
@@ -219,6 +261,100 @@ function ScoreTab({
         fixingTarget={fixingTarget}
       />
     </div>
+  )
+}
+
+function PostFixBanner({
+  fix,
+  grade,
+  composite,
+  onDownload,
+  onDismiss,
+  onOpenAudit,
+}: {
+  fix: { count: number; description: string }
+  grade: string
+  composite: number
+  onDownload: () => void
+  onDismiss: () => void
+  onOpenAudit: () => void
+}) {
+  const headline =
+    fix.count > 1
+      ? `Applied ${fix.count} fixes. Score is now ${grade} (${composite.toFixed(2)}).`
+      : `Fix applied. Score is now ${grade} (${composite.toFixed(2)}).`
+  return (
+    <div
+      role="status"
+      className="rounded-2xl border-2 border-emerald-200 bg-emerald-50 p-5 shadow-sm flex items-start gap-4"
+    >
+      <div className="shrink-0 mt-0.5 h-9 w-9 rounded-full bg-emerald-500 flex items-center justify-center text-white">
+        <CheckIcon />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-emerald-900">{headline}</p>
+        {fix.count === 1 && (
+          <p className="text-xs text-emerald-800 mt-0.5 truncate">{fix.description}</p>
+        )}
+        <p className="text-xs text-emerald-700/80 mt-2">
+          Your saved model now reflects these changes. Download the JSON to use
+          it (the file stays in its original format).
+        </p>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            onClick={onDownload}
+            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors shadow-sm inline-flex items-center gap-1.5"
+          >
+            <DownloadIcon />
+            Download fixed JSON
+          </button>
+          <button
+            onClick={onOpenAudit}
+            className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 transition-colors"
+          >
+            View change log
+          </button>
+        </div>
+      </div>
+      <button
+        onClick={onDismiss}
+        title="Dismiss"
+        className="shrink-0 -mt-1 -mr-1 p-1 text-emerald-700/60 hover:text-emerald-900"
+      >
+        <CloseIcon />
+      </button>
+    </div>
+  )
+}
+
+function countFixes(model: SavedModel): number {
+  return model.audit.filter((e) => /^Fix(?:-all)?:/i.test(e.message)).length
+}
+
+function DownloadIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
   )
 }
 

@@ -36,6 +36,14 @@ export default function App() {
     ruleId: string
     targetObjId: number
   } | null>(null)
+  // Tracks the most recent successful fix(es) for the inline post-fix banner.
+  // Cleared on model change, Re-score, or explicit dismiss/Download so the
+  // banner only nags about the *latest* batch of changes.
+  const [lastFix, setLastFix] = useState<{
+    modelId: string
+    count: number
+    description: string
+  } | null>(null)
 
   // Default the folder selection to the first folder of the first library so
   // the inline uploader has a clear "save under here" target.
@@ -48,6 +56,14 @@ export default function App() {
       setSelectedFolderId(fld.id)
     }
   }, [state, selectedFolderId])
+
+  // Drop the post-fix banner whenever the user navigates to a different model
+  // — it's about the *previous* model's just-applied fixes, not the new one.
+  useEffect(() => {
+    if (lastFix && lastFix.modelId !== selectedModelId) {
+      setLastFix(null)
+    }
+  }, [selectedModelId, lastFix])
 
   function persist(next: MartState): boolean {
     try {
@@ -99,6 +115,7 @@ export default function App() {
   async function handleRescore() {
     if (!selected) return
     setError(null)
+    setLastFix(null)  // a fresh scan supersedes the post-fix banner
     setBusy(true)
     try {
       const result = await scoreJson(selected.model.catalog_json)
@@ -132,7 +149,7 @@ export default function App() {
         setError(`Fix not applied: ${resp.description}`)
         return
       }
-      persist(
+      const ok = persist(
         updateModelCatalog(
           state,
           selected.model.id,
@@ -141,6 +158,13 @@ export default function App() {
           `Fix: ${resp.description}`
         )
       )
+      if (ok) {
+        setLastFix({
+          modelId: selected.model.id,
+          count: 1,
+          description: resp.description,
+        })
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -159,15 +183,23 @@ export default function App() {
         setError('No auto-fixable findings to apply.')
         return
       }
-      persist(
+      const summary = `Fix-all: applied ${resp.applied.length} fix${resp.applied.length === 1 ? '' : 'es'}`
+      const ok = persist(
         updateModelCatalog(
           state,
           selected.model.id,
           resp.catalog,
           resp.result,
-          `Fix-all: applied ${resp.applied.length} fix${resp.applied.length === 1 ? '' : 'es'}`
+          summary
         )
       )
+      if (ok) {
+        setLastFix({
+          modelId: selected.model.id,
+          count: resp.applied.length,
+          description: summary,
+        })
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -252,6 +284,8 @@ export default function App() {
               rescoring={busy}
               fixing={fixing}
               fixingTarget={fixingTarget}
+              lastFix={lastFix && lastFix.modelId === selected.model.id ? lastFix : null}
+              onDismissLastFix={() => setLastFix(null)}
               onRescore={handleRescore}
               onRename={handleRename}
               onDelete={handleDelete}
