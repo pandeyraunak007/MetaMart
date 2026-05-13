@@ -71,30 +71,53 @@ _ATTR_INNER_KEYS = ("Attribute", "Attributes", "attribute", "attributes", "Colum
 # ── top-level entry point ─────────────────────────────────────
 
 def normalize_catalog(data: Any) -> Any:
-    """Convert known foreign shapes to native catalog format. Idempotent."""
+    """Convert known foreign shapes to native catalog format. Idempotent.
+
+    Adapters are tried in order of specificity. Each one that *recognizes* the
+    shape produces a candidate; only candidates with non-empty `entities`
+    count. If no specific adapter produced entities, the generic walker is
+    run as a last resort. We then pick the candidate with the most entities
+    (a stronger signal of a correct match than just shape recognition).
+    """
     if not isinstance(data, dict):
         return data
     if "entities" in data and isinstance(data["entities"], list):
         return data
-    if _looks_like_erwin(data):
-        return _adapt_erwin(data)
-    if "tables" in data and isinstance(data["tables"], list):
-        return _adapt_tables(data)
-    if _looks_like_dbt(data):
-        return _adapt_dbt(data)
-    if _looks_like_polymorphic(data):
-        return _adapt_polymorphic_objects(data)
-    if _looks_like_openapi(data):
-        return _adapt_openapi(data)
 
-    # Last resort: walk the tree looking for entity-shaped dicts anywhere.
+    candidates: list[dict[str, Any]] = []
+
+    def _try(check, adapt) -> None:
+        try:
+            if check(data):
+                result = adapt(data)
+                if isinstance(result, dict) and result.get("entities"):
+                    candidates.append(result)
+        except Exception:
+            # An adapter mis-fire shouldn't poison the whole pipeline.
+            pass
+
+    _try(_looks_like_erwin, _adapt_erwin)
+    _try(lambda d: "tables" in d and isinstance(d["tables"], list), _adapt_tables)
+    _try(_looks_like_dbt, _adapt_dbt)
+    _try(_looks_like_polymorphic, _adapt_polymorphic_objects)
+    _try(_looks_like_openapi, _adapt_openapi)
+
+    # Generic walker — always try it as another candidate; for nested erwin
+    # shapes that our specific adapter missed, this often finds the entities.
     discovered = _walk_for_entities(data)
     if discovered:
-        return {
-            "name": _g(data, "name", "Name", "title", "Title", default="Auto-detected model"),
-            "model_type": "physical",
-            "entities": discovered,
-        }
+        candidates.append(
+            {
+                "name": _g(data, "name", "Name", "title", "Title", default="Auto-detected model"),
+                "model_type": "physical",
+                "entities": discovered,
+            }
+        )
+
+    if candidates:
+        # Prefer the adapter that found the most entities.
+        return max(candidates, key=lambda c: len(c["entities"]))
+
     return data
 
 
