@@ -6,9 +6,10 @@ import RadarPanel from './RadarPanel'
 import SubScoreList from './SubScoreList'
 import FindingsList from './FindingsList'
 import Sparkline from './Sparkline'
+import CompareTab from './CompareTab'
 import { RULE_INFO, parseFixDescription } from '../ruleInfo'
 
-type Tab = 'overview' | 'score' | 'versions' | 'audit'
+type Tab = 'overview' | 'score' | 'versions' | 'compare' | 'audit'
 
 export interface LastFix {
   count: number
@@ -148,24 +149,35 @@ export default function ModelView({
           </div>
         </div>
         <nav className="mt-5 -mb-px flex gap-6">
-          {(['overview', 'score', 'versions', 'audit'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`pb-2.5 text-sm font-medium border-b-2 transition-colors ${
-                tab === t
-                  ? 'border-amber-500 text-slate-900'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              {t.charAt(0).toUpperCase() + t.slice(1)}
-              {t === 'versions' && (
-                <span className="ml-1.5 text-[10px] font-mono text-slate-400">
-                  {model.scans.length}
-                </span>
-              )}
-            </button>
-          ))}
+          {(['overview', 'score', 'versions', 'compare', 'audit'] as const).map((t) => {
+            const compareDisabled = t === 'compare' && model.scans.length < 2
+            return (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                disabled={compareDisabled}
+                title={
+                  compareDisabled
+                    ? 'Need at least 2 scans to compare. Re-score this model or apply a fix to enable.'
+                    : undefined
+                }
+                className={`pb-2.5 text-sm font-medium border-b-2 transition-colors ${
+                  tab === t
+                    ? 'border-amber-500 text-slate-900'
+                    : compareDisabled
+                      ? 'border-transparent text-slate-300 cursor-not-allowed'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+                {t === 'versions' && (
+                  <span className="ml-1.5 text-[10px] font-mono text-slate-400">
+                    {model.scans.length}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </nav>
       </header>
 
@@ -190,6 +202,7 @@ export default function ModelView({
           )
         )}
         {tab === 'versions' && <VersionsTab model={model} />}
+        {tab === 'compare' && <CompareTab model={model} />}
         {tab === 'audit' && <AuditTab model={model} />}
       </div>
     </div>
