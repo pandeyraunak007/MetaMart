@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fixAll, fixFinding, scoreJson } from './api'
-import type { MartState } from './types'
+import type { MartState, PackOverrides } from './types'
 import {
   addScan,
   createFolder,
@@ -12,6 +12,7 @@ import {
   loadState,
   renameModel,
   saveState,
+  setCustomPack,
   StorageQuotaError,
   updateModelCatalog,
 } from './storage'
@@ -20,8 +21,9 @@ import Sidebar from './components/Sidebar'
 import Uploader from './components/Uploader'
 import ModelView from './components/ModelView'
 import Portfolio from './components/Portfolio'
+import RulesPanel from './components/RulesPanel'
 
-type View = 'browse' | 'portfolio'
+type View = 'browse' | 'portfolio' | 'rules'
 
 export default function App() {
   const [state, setState] = useState<MartState>(() => loadState())
@@ -99,7 +101,7 @@ export default function App() {
     setError(null)
     setBusy(true)
     try {
-      const result = await scoreJson(catalog)
+      const result = await scoreJson(catalog, state.custom_pack)
       const name = suggestedName?.trim() || `Model ${new Date().toLocaleString()}`
       const { state: next, modelId } = createModel(
         state,
@@ -124,7 +126,7 @@ export default function App() {
     setLastFix(null)  // a fresh scan supersedes the post-fix banner
     setBusy(true)
     try {
-      const result = await scoreJson(selected.model.catalog_json)
+      const result = await scoreJson(selected.model.catalog_json, state.custom_pack)
       persist(addScan(state, selected.model.id, result))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -150,7 +152,12 @@ export default function App() {
     setFixing(true)
     setFixingTarget({ ruleId, targetObjId })
     try {
-      const resp = await fixFinding(selected.model.catalog_json, ruleId, targetObjId)
+      const resp = await fixFinding(
+        selected.model.catalog_json,
+        ruleId,
+        targetObjId,
+        state.custom_pack
+      )
       if (!resp.applied) {
         setError(`Fix not applied: ${resp.description}`)
         return
@@ -186,7 +193,11 @@ export default function App() {
     setError(null)
     setFixing(true)
     try {
-      const resp = await fixAll(selected.model.catalog_json)
+      const resp = await fixAll(
+        selected.model.catalog_json,
+        undefined,
+        state.custom_pack
+      )
       if (resp.applied.length === 0) {
         setError('No auto-fixable findings to apply.')
         return
@@ -227,6 +238,10 @@ export default function App() {
     if (!result) return
     persist(result.state)
     setSelectedModelId(result.modelId)
+  }
+
+  function handleSavePack(pack: PackOverrides | null) {
+    persist(setCustomPack(state, pack))
   }
 
   // The "Add model to this folder" button in the sidebar shifts focus to the
@@ -280,9 +295,26 @@ export default function App() {
               model.
             </div>
           )}
+          {view === 'rules' && (
+            <div className="px-4 py-6 text-xs text-slate-500 leading-relaxed space-y-2">
+              <p>
+                Configure which rules fire and at what severity. Saved
+                settings apply to every score, fix, and re-score.
+              </p>
+              {state.custom_pack && (
+                <p className="text-amber-700 font-medium">
+                  Custom pack active —{' '}
+                  {state.custom_pack.rules.length} override
+                  {state.custom_pack.rules.length === 1 ? '' : 's'}.
+                </p>
+              )}
+            </div>
+          )}
         </div>
         <main className="flex-1 min-w-0 overflow-hidden">
-          {view === 'portfolio' ? (
+          {view === 'rules' ? (
+            <RulesPanel state={state} onSave={handleSavePack} />
+          ) : view === 'portfolio' ? (
             <Portfolio
               state={state}
               onOpenModel={(modelId, folderId, libraryId) => {
@@ -352,10 +384,11 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => voi
   const tabs: Array<{ id: View; label: string }> = [
     { id: 'browse', label: 'Browse' },
     { id: 'portfolio', label: 'Portfolio' },
+    { id: 'rules', label: 'Rules' },
   ]
   return (
     <div className="px-3 pt-3 pb-3 border-b border-slate-200">
-      <div className="grid grid-cols-2 gap-1 bg-slate-100 rounded-lg p-1">
+      <div className="grid grid-cols-3 gap-1 bg-slate-100 rounded-lg p-1">
         {tabs.map((t) => (
           <button
             key={t.id}

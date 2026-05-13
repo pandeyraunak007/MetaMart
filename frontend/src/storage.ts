@@ -12,6 +12,7 @@ import type {
   Folder,
   Library,
   MartState,
+  PackOverrides,
   SavedModel,
   Scan,
   ScanResult,
@@ -296,6 +297,17 @@ export function forkModel(
 function structuredCloneCompat<T>(v: T): T {
   if (typeof structuredClone === 'function') return structuredClone(v)
   return JSON.parse(JSON.stringify(v))
+}
+
+export function setCustomPack(
+  state: MartState,
+  pack: PackOverrides | null
+): MartState {
+  // Empty rule list = identical to default → store as null so the API
+  // helpers skip the envelope shape and we don't burn cache on a no-op.
+  const normalized =
+    pack && pack.rules.length > 0 ? pack : null
+  return { ...state, custom_pack: normalized }
 }
 
 export function deleteModel(state: MartState, modelId: string): MartState {

@@ -106,7 +106,35 @@ export interface Library {
 
 export interface MartState {
   libraries: Library[]
+  // The user's active rule pack overrides (single pack for v1). Sent with
+  // every /score-json, /fix, /fix-all call so all scores reflect the same
+  // configured rule pack. Null/undefined = use the server default pack.
+  custom_pack?: PackOverrides | null
   // Schema version — bump when we change the on-disk shape so older clients
   // can wipe-and-reseed instead of crashing on missing fields.
   schema_version: 1
+}
+
+// ── rule pack editor ────────────────────────────────────────
+
+export type RuleParamValue = string | number | boolean | string[]
+
+export interface RuleOverride {
+  rule_id: string
+  enabled?: boolean
+  severity_override?: Severity
+  params_override?: Record<string, RuleParamValue>
+}
+
+export interface PackOverrides {
+  rules: RuleOverride[]
+}
+
+/** Returned by GET /quality/rules — describes one registered rule. */
+export interface RuleSpecRead {
+  rule_id: string
+  dimension: Dimension
+  default_severity: Severity
+  default_params: Record<string, RuleParamValue>
+  has_fixer: boolean
 }

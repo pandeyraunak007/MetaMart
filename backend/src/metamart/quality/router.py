@@ -17,19 +17,21 @@ from metamart.quality.ingest_json import catalog_from_json
 from metamart.quality.pack import default_pack
 from metamart.quality.registry import registry as default_registry
 from metamart.quality.schemas import FindingRead, ScanResultRead, SubScoreRead
-from metamart.quality.types import Finding, ScanResult
+from metamart.quality.types import Finding, RuleConfig, RulePack, ScanResult, Severity
 
 router = APIRouter(prefix="/quality", tags=["quality"])
 
 
 @router.post("/score-json", response_model=ScanResultRead)
-def api_score_json(catalog: Any = Body(...)) -> ScanResultRead:
+def api_score_json(body: Any = Body(...)) -> ScanResultRead:
     """Score a user-supplied catalog using the Default rule pack.
 
-    Accepts either a catalog object or a list. A single-element list whose
-    only item looks like a whole-catalog wrapper (e.g. erwin "Save As JSON"
-    files) is unwrapped; other lists are treated as a bare entities array.
+    The body can be the catalog directly (legacy shape — a JSON object or
+    list), OR an envelope `{catalog, pack_overrides?}` so the caller can
+    pass per-rule enable / severity / params overrides without forking the
+    server-side default pack.
     """
+    catalog, pack = _parse_scoring_body(body)
     original = catalog
     catalog = _coerce_to_catalog(catalog)
 
@@ -45,8 +47,30 @@ def api_score_json(catalog: Any = Body(...)) -> ScanResultRead:
         }
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail) from exc
 
-    result = score_catalog(snapshot, default_pack())
+    result = score_catalog(snapshot, pack)
     return _to_schema(result)
+
+
+@router.get("/rules")
+def api_list_rules() -> dict[str, Any]:
+    """Return every registered rule with its metadata.
+
+    Frontend rules editor uses this to render controls without hardcoding
+    the registry. Returned shape is stable: `{rules: [{rule_id, dimension,
+    default_severity, default_params, has_fixer}]}`.
+    """
+    return {
+        "rules": [
+            {
+                "rule_id": spec.rule_id,
+                "dimension": spec.dimension.value,
+                "default_severity": spec.default_severity.value,
+                "default_params": spec.default_params,
+                "has_fixer": default_registry.has_fixer(spec.rule_id),
+            }
+            for spec in default_registry.all()
+        ]
+    }
 
 
 @router.post("/fix")
@@ -75,8 +99,9 @@ def api_fix(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     normalized = _normalize_to_native(catalog)
     snapshot = catalog_from_json(copy.deepcopy(normalized))
 
-    # Find the actual finding to pass to the fixer (it carries severity etc).
-    pack = default_pack()
+    # Use the caller's active pack so re-scores after the fix reflect any
+    # custom severities / disabled rules they configured.
+    pack = _build_pack(payload.get("pack_overrides"))
     pre = score_catalog(snapshot, pack)
     finding = next(
         (
@@ -116,7 +141,7 @@ def api_fix_all(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "'rule_ids' must be a list")
     allowed = set(allow_rules) if allow_rules else None
 
-    pack = default_pack()
+    pack = _build_pack(payload.get("pack_overrides"))
     # `current_input` is whatever shape we'd send back to /score-json next:
     # the original erwin array (a list) for erwin-sourced models, the native
     # dict otherwise. Each iteration re-normalizes it to score the latest
@@ -165,6 +190,88 @@ def api_fix_all(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         "applied": applied,
         "result": _to_schema(final_result).model_dump(),
     }
+
+
+def _parse_scoring_body(body: Any) -> tuple[Any, RulePack]:
+    """Split the /score-json body into (catalog, pack).
+
+    Two accepted shapes for backward compatibility:
+      - The bare catalog (dict or list) — uses the default pack.
+      - `{catalog, pack_overrides?}` envelope — applies the overrides.
+
+    The envelope shape is recognized when the dict has a `catalog` key AND
+    no `entities` key (the native catalog discriminator). This avoids
+    misclassifying a catalog that happens to contain a `catalog` key.
+    """
+    if (
+        isinstance(body, dict)
+        and "catalog" in body
+        and "entities" not in body
+        and "_erwin_native_objects" not in body
+    ):
+        return body["catalog"], _build_pack(body.get("pack_overrides"))
+    return body, default_pack()
+
+
+def _build_pack(overrides: Any) -> RulePack:
+    """Construct a RulePack from optional caller-supplied overrides.
+
+    Override shape: `{rules: [{rule_id, enabled?, severity_override?, params_override?}]}`.
+    Anything missing falls back to the rule's registered defaults.
+    """
+    if overrides is None:
+        return default_pack()
+    if not isinstance(overrides, dict):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "'pack_overrides' must be an object with a 'rules' list",
+        )
+    rules_raw = overrides.get("rules") or []
+    if not isinstance(rules_raw, list):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "'pack_overrides.rules' must be a list",
+        )
+
+    configs: list[RuleConfig] = []
+    for raw in rules_raw:
+        if not isinstance(raw, dict) or "rule_id" not in raw:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "each pack_overrides.rules[] entry needs a 'rule_id'",
+            )
+        rule_id = raw["rule_id"]
+        # Drop overrides for unknown rules silently — old packs in the
+        # client's localStorage shouldn't fail scoring after a rule rename.
+        try:
+            default_registry.get(rule_id)
+        except KeyError:
+            continue
+        sev_str = raw.get("severity_override")
+        sev: Severity | None = None
+        if sev_str is not None:
+            try:
+                sev = Severity(sev_str)
+            except ValueError as exc:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"invalid severity_override '{sev_str}' for rule '{rule_id}'",
+                ) from exc
+        params = raw.get("params_override") or {}
+        if not isinstance(params, dict):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"params_override for rule '{rule_id}' must be an object",
+            )
+        configs.append(
+            RuleConfig(
+                rule_id=rule_id,
+                enabled=bool(raw.get("enabled", True)),
+                severity_override=sev,
+                params_override=params,
+            )
+        )
+    return RulePack(pack_id="custom", name="Custom", rules=configs)
 
 
 def _normalize_to_native(catalog: Any) -> dict[str, Any]:

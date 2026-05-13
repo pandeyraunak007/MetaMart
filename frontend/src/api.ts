@@ -1,4 +1,10 @@
-import type { FixAllResponse, FixResponse, ScanResult } from './types'
+import type {
+  FixAllResponse,
+  FixResponse,
+  PackOverrides,
+  RuleSpecRead,
+  ScanResult,
+} from './types'
 
 interface FastApiValidationError {
   loc?: (string | number)[]
@@ -43,11 +49,20 @@ function formatErrorDetail(raw: string): string {
   return JSON.stringify(parsed)
 }
 
-export async function scoreJson(catalog: unknown): Promise<ScanResult> {
+export async function scoreJson(
+  catalog: unknown,
+  packOverrides?: PackOverrides | null
+): Promise<ScanResult> {
+  // Use the envelope shape only when overrides are present, so older
+  // server versions that didn't recognize the envelope still work for
+  // default-pack scoring.
+  const body = packOverrides
+    ? { catalog, pack_overrides: packOverrides }
+    : catalog
   const resp = await fetch('/api/v1/quality/score-json', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(catalog),
+    body: JSON.stringify(body),
   })
   if (!resp.ok) {
     const raw = await resp.text()
@@ -59,12 +74,19 @@ export async function scoreJson(catalog: unknown): Promise<ScanResult> {
 export async function fixFinding(
   catalog: unknown,
   ruleId: string,
-  targetObjId: number
+  targetObjId: number,
+  packOverrides?: PackOverrides | null
 ): Promise<FixResponse> {
+  const body: Record<string, unknown> = {
+    catalog,
+    rule_id: ruleId,
+    target_obj_id: targetObjId,
+  }
+  if (packOverrides) body.pack_overrides = packOverrides
   const resp = await fetch('/api/v1/quality/fix', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ catalog, rule_id: ruleId, target_obj_id: targetObjId }),
+    body: JSON.stringify(body),
   })
   if (!resp.ok) {
     const raw = await resp.text()
@@ -75,16 +97,30 @@ export async function fixFinding(
 
 export async function fixAll(
   catalog: unknown,
-  ruleIds?: string[]
+  ruleIds?: string[],
+  packOverrides?: PackOverrides | null
 ): Promise<FixAllResponse> {
+  const body: Record<string, unknown> = { catalog }
+  if (ruleIds) body.rule_ids = ruleIds
+  if (packOverrides) body.pack_overrides = packOverrides
   const resp = await fetch('/api/v1/quality/fix-all', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(ruleIds ? { catalog, rule_ids: ruleIds } : { catalog }),
+    body: JSON.stringify(body),
   })
   if (!resp.ok) {
     const raw = await resp.text()
     throw new Error(`${resp.status}: ${formatErrorDetail(raw)}`)
   }
   return (await resp.json()) as FixAllResponse
+}
+
+export async function listRules(): Promise<RuleSpecRead[]> {
+  const resp = await fetch('/api/v1/quality/rules')
+  if (!resp.ok) {
+    const raw = await resp.text()
+    throw new Error(`${resp.status}: ${formatErrorDetail(raw)}`)
+  }
+  const body = (await resp.json()) as { rules: RuleSpecRead[] }
+  return body.rules
 }
