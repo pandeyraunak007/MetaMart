@@ -12,6 +12,7 @@ import {
   loadState,
   renameModel,
   saveState,
+  StorageQuotaError,
   updateModelCatalog,
 } from './storage'
 import Banner from './components/Banner'
@@ -48,9 +49,20 @@ export default function App() {
     }
   }, [state, selectedFolderId])
 
-  function persist(next: MartState) {
-    saveState(next)
-    setState(next)
+  function persist(next: MartState): boolean {
+    try {
+      saveState(next)
+      setState(next)
+      return true
+    } catch (e) {
+      if (e instanceof StorageQuotaError) {
+        // Don't update state — leave the prior in-memory state intact so the
+        // user can still delete/export models to free space.
+        setError(e.message)
+        return false
+      }
+      throw e
+    }
   }
 
   const selected = selectedModelId ? findModel(state, selectedModelId) : null
