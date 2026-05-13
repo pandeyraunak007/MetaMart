@@ -9,11 +9,15 @@ import metamart.quality  # noqa: F401  -- registers all built-in rules
 
 from metamart.quality.adapters import looks_like_catalog_wrapper, normalize_catalog
 from metamart.quality.engine import score_catalog
+from metamart.quality.erwin_format import (
+    rename_attribute as erwin_rename_attribute,
+)
+from metamart.quality.erwin_format import rename_entity as erwin_rename_entity
 from metamart.quality.ingest_json import catalog_from_json
 from metamart.quality.pack import default_pack
 from metamart.quality.registry import registry as default_registry
 from metamart.quality.schemas import FindingRead, ScanResultRead, SubScoreRead
-from metamart.quality.types import ScanResult
+from metamart.quality.types import Finding, ScanResult
 
 router = APIRouter(prefix="/quality", tags=["quality"])
 
@@ -87,23 +91,10 @@ def api_fix(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             f"no current finding {rule_id} #{target_obj_id} — already fixed or stale",
         )
 
-    patched, description = fixer(copy.deepcopy(normalized), finding, snapshot)
-    if patched is None:
-        return {
-            "applied": False,
-            "description": description,
-            "catalog": normalized,
-            "result": _to_schema(pre).model_dump(),
-        }
-
-    new_snapshot = catalog_from_json(copy.deepcopy(patched))
-    new_result = score_catalog(new_snapshot, pack)
-    return {
-        "applied": True,
-        "description": description,
-        "catalog": patched,
-        "result": _to_schema(new_result).model_dump(),
-    }
+    out = _apply_one_fix(normalized, snapshot, finding, fixer, pack)
+    if not out["applied"]:
+        out["result"] = _to_schema(pre).model_dump()
+    return out
 
 
 @router.post("/fix-all")
@@ -126,14 +117,19 @@ def api_fix_all(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     allowed = set(allow_rules) if allow_rules else None
 
     pack = default_pack()
-    current = _normalize_to_native(catalog)
+    # `current_input` is whatever shape we'd send back to /score-json next:
+    # the original erwin array (a list) for erwin-sourced models, the native
+    # dict otherwise. Each iteration re-normalizes it to score the latest
+    # state, then mutates the matching shape in place.
+    current_input: Any = catalog
     applied: list[dict[str, Any]] = []
 
     # Iterate fix-and-rescore until no fixable findings remain. A small cap
     # keeps us from looping forever if a buggy fixer keeps re-introducing
     # the same finding.
     for _ in range(50):
-        snapshot = catalog_from_json(copy.deepcopy(current))
+        normalized = _normalize_to_native(current_input)
+        snapshot = catalog_from_json(copy.deepcopy(normalized))
         result = score_catalog(snapshot, pack)
         targets = [
             f for f in result.findings
@@ -146,8 +142,9 @@ def api_fix_all(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         fixer = default_registry.fixer(finding.rule_id)
         if fixer is None:
             break
-        patched, description = fixer(copy.deepcopy(current), finding, snapshot)
-        if patched is None:
+
+        out = _apply_one_fix(normalized, snapshot, finding, fixer, pack)
+        if not out["applied"]:
             # Fix declined for this finding — don't loop forever on it.
             allowed = (allowed or {f.rule_id for f in default_registry.all()}) - {finding.rule_id}
             continue
@@ -155,15 +152,16 @@ def api_fix_all(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             {
                 "rule_id": finding.rule_id,
                 "target_obj_id": finding.target_obj_id,
-                "description": description,
+                "description": out["description"],
             }
         )
-        current = patched
+        current_input = out["catalog"]
 
-    final_snapshot = catalog_from_json(copy.deepcopy(current))
+    final_normalized = _normalize_to_native(current_input)
+    final_snapshot = catalog_from_json(copy.deepcopy(final_normalized))
     final_result = score_catalog(final_snapshot, pack)
     return {
-        "catalog": current,
+        "catalog": current_input,
         "applied": applied,
         "result": _to_schema(final_result).model_dump(),
     }
@@ -179,6 +177,119 @@ def _normalize_to_native(catalog: Any) -> dict[str, Any]:
             "catalog could not be normalized to native shape",
         )
     return normalized
+
+
+def _apply_one_fix(
+    normalized: dict[str, Any],
+    snapshot: Any,
+    finding: Finding,
+    fixer: Any,
+    pack: Any,
+) -> dict[str, Any]:
+    """Run the fixer once, preserving the input format on the way out.
+
+    For erwin-sourced catalogs, the patched native dict from the fixer is
+    used only to read the new physical_name; the actual mutation happens on
+    the original erwin items array so the response stays openable in erwin
+    DM. For native-sourced catalogs, we just return the patched native dict.
+
+    Returns either:
+      {applied: True, description, catalog: <list|dict>, result: <scored>}
+      {applied: False, description, catalog: <input as-is>}
+    """
+    fixed_native, description = fixer(copy.deepcopy(normalized), finding, snapshot)
+    if fixed_native is None:
+        return {
+            "applied": False,
+            "description": description,
+            "catalog": _public_catalog(normalized),
+        }
+
+    source_format = normalized.get("_source_format")
+    if source_format == "erwin_native":
+        target = _resolve_renamed_target(normalized, fixed_native)
+        if target is None:
+            return {
+                "applied": False,
+                "description": "could not map fix back to erwin object",
+                "catalog": normalized.get("_erwin_items"),
+            }
+        kind, erwin_oid, new_name = target
+        items = copy.deepcopy(normalized["_erwin_items"])
+        ok = (
+            erwin_rename_attribute(items, erwin_oid, new_name)
+            if kind == "attribute"
+            else erwin_rename_entity(items, erwin_oid, new_name)
+        )
+        if not ok:
+            return {
+                "applied": False,
+                "description": f"erwin object {erwin_oid} not found in source array",
+                "catalog": normalized.get("_erwin_items"),
+            }
+        new_normalized = normalize_catalog(items)
+        new_snapshot = catalog_from_json(copy.deepcopy(new_normalized))
+        new_result = score_catalog(new_snapshot, pack)
+        return {
+            "applied": True,
+            "description": description,
+            "catalog": items,
+            "result": _to_schema(new_result).model_dump(),
+        }
+
+    # Native-source path: the patched native dict is the answer.
+    new_snapshot = catalog_from_json(copy.deepcopy(fixed_native))
+    new_result = score_catalog(new_snapshot, pack)
+    return {
+        "applied": True,
+        "description": description,
+        "catalog": _public_catalog(fixed_native),
+        "result": _to_schema(new_result).model_dump(),
+    }
+
+
+def _resolve_renamed_target(
+    before: dict[str, Any], after: dict[str, Any]
+) -> tuple[str, str, str] | None:
+    """Diff `before` and `after` to find which entity/attribute was renamed.
+
+    Returns (kind, erwin_oid, new_physical_name) or None if no rename was
+    detected (e.g. the fixer was a no-op, or the entity has no _erwin_oid
+    stamp because the catalog wasn't erwin-sourced).
+    """
+    for old_e, new_e in zip(before.get("entities", []), after.get("entities", [])):
+        if old_e.get("_erwin_oid") and old_e.get("physical_name") != new_e.get("physical_name"):
+            return ("entity", old_e["_erwin_oid"], new_e["physical_name"])
+        for old_a, new_a in zip(old_e.get("attributes", []), new_e.get("attributes", [])):
+            if old_a.get("_erwin_oid") and old_a.get("physical_name") != new_a.get("physical_name"):
+                return ("attribute", old_a["_erwin_oid"], new_a["physical_name"])
+    return None
+
+
+def _public_catalog(d: dict[str, Any]) -> dict[str, Any]:
+    """Strip internal `_*`-prefixed provenance keys from a native catalog dict.
+
+    Users shouldn't see `_erwin_oid` / `_erwin_items` in API responses for
+    native-shape outputs. The erwin-source path returns the raw items array
+    directly, so it never goes through here.
+    """
+    out = {k: v for k, v in d.items() if not k.startswith("_")}
+    if "entities" in out and isinstance(out["entities"], list):
+        cleaned: list[dict[str, Any]] = []
+        for e in out["entities"]:
+            if not isinstance(e, dict):
+                cleaned.append(e)
+                continue
+            ce = {k: v for k, v in e.items() if not k.startswith("_")}
+            if "attributes" in ce and isinstance(ce["attributes"], list):
+                ce["attributes"] = [
+                    {k: v for k, v in a.items() if not k.startswith("_")}
+                    if isinstance(a, dict) else a
+                    for a in ce["attributes"]
+                ]
+            cleaned.append(ce)
+        out["entities"] = cleaned
+    return out
 
 
 @router.post("/inspect")

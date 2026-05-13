@@ -1019,6 +1019,9 @@ def _adapt_erwin_native_list(items: list[Any]) -> dict[str, Any]:
                     "data_type": _erwin_attr_datatype(a),
                     "is_nullable": True,
                     "position": j + 1,
+                    # Provenance — used by /fix and /fix-all to reach back into
+                    # the original erwin items and apply renames in place.
+                    "_erwin_oid": a["O_Id"],
                 }
             )
 
@@ -1059,6 +1062,7 @@ def _adapt_erwin_native_list(items: list[Any]) -> dict[str, Any]:
                 "physical_name": _slug(e_name),
                 "attributes": attributes,
                 "keys": keys,
+                "_erwin_oid": e_oid,
             }
         )
 
@@ -1091,4 +1095,8 @@ def _adapt_erwin_native_list(items: list[Any]) -> dict[str, Any]:
         "model_type": "physical",
         "entities": entities,
         "relationships": relationships,
+        # Provenance — lets the fix endpoints render output back into the
+        # original erwin shape so the file stays openable in erwin DM.
+        "_source_format": "erwin_native",
+        "_erwin_items": items,
     }
