@@ -36,6 +36,8 @@ def test_openapi_advertises_mart_routes() -> None:
         "/api/v1/mart/models/{obj_id}/checkin",
         "/api/v1/mart/models/{obj_id}/versions",
         "/api/v1/mart/permissions",
+        # Quality
+        "/api/v1/quality/score-json",
     }
     missing = expected - paths.keys()
     assert not missing, f"Missing routes: {missing}"

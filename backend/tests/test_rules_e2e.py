@@ -11,17 +11,16 @@ from pathlib import Path
 
 import metamart.quality  # noqa: F401 -- registers built-in rules
 from metamart.quality.engine import score_catalog
+from metamart.quality.ingest_json import catalog_from_json
 from metamart.quality.pack import default_pack
 from metamart.quality.types import Dimension
-
-from ._synth import synth_catalog_from_json
 
 SEED_DIR = Path(__file__).parent.parent / "seed_data"
 
 
 def _score(seed_name: str):
     with (SEED_DIR / seed_name).open() as fh:
-        cat = synth_catalog_from_json(json.load(fh))
+        cat = catalog_from_json(json.load(fh))
     return score_catalog(cat, default_pack())
 
 

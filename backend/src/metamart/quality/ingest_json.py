@@ -1,7 +1,9 @@
-"""Build a `CatalogSnapshot` from a seed-style JSON dict — no DB needed.
+"""Build a `CatalogSnapshot` from a JSON catalog dict (no DB).
 
-Used by tests/test_rules_e2e.py to score the seed catalogs without standing up
-Postgres. Local string IDs in the JSON are mapped to stable integer obj_ids.
+Use this when scoring a user-supplied model file directly, without persisting
+it to the mart schema. See `backend/seed_data/*.json` for the format. Local
+`id` strings in the JSON are mapped to stable integer obj_ids so cross-
+references (key members, relationships, lineage) resolve.
 """
 from __future__ import annotations
 
@@ -19,7 +21,20 @@ from metamart.quality.catalog import (
 )
 
 
-def synth_catalog_from_json(data: dict[str, Any]) -> CatalogSnapshot:
+def catalog_from_json(data: dict[str, Any]) -> CatalogSnapshot:
+    """Convert a JSON catalog spec to a `CatalogSnapshot`.
+
+    Required top-level keys: `name`, `model_type`.
+    Each entity needs `id`, `logical_name`, `physical_name`.
+    Each attribute needs `id`, `logical_name`, `physical_name`, `data_type`.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("catalog must be a JSON object")
+    if "name" not in data:
+        raise ValueError("catalog is missing required key 'name'")
+    if "model_type" not in data:
+        raise ValueError("catalog is missing required key 'model_type'")
+
     next_id = [100]
     id_map: dict[str, int] = {}
 
@@ -54,22 +69,32 @@ def synth_catalog_from_json(data: dict[str, Any]) -> CatalogSnapshot:
     lineage: list[LineageEdge] = []
 
     for e in data.get("entities", []):
+        if "id" not in e or "logical_name" not in e or "physical_name" not in e:
+            raise ValueError(
+                f"entity missing required keys (id/logical_name/physical_name): {e!r}"
+            )
         entity_id = assign(e["id"])
 
-        attributes = [
-            Attribute(
-                obj_id=assign(a["id"]),
-                entity_obj_id=entity_id,
-                logical_name=a["logical_name"],
-                physical_name=a["physical_name"],
-                data_type=a["data_type"],
-                is_nullable=a.get("is_nullable", True),
-                position=a.get("position", 0),
-                comment=a.get("comment"),
-                domain_obj_id=id_map.get(a.get("domain")) if a.get("domain") else None,
+        attributes = []
+        for a in e.get("attributes", []):
+            if "id" not in a or "physical_name" not in a or "data_type" not in a:
+                raise ValueError(
+                    f"attribute in entity '{e['physical_name']}' missing required keys "
+                    f"(id/physical_name/data_type): {a!r}"
+                )
+            attributes.append(
+                Attribute(
+                    obj_id=assign(a["id"]),
+                    entity_obj_id=entity_id,
+                    logical_name=a.get("logical_name", a["physical_name"]),
+                    physical_name=a["physical_name"],
+                    data_type=a["data_type"],
+                    is_nullable=a.get("is_nullable", True),
+                    position=a.get("position", 0),
+                    comment=a.get("comment"),
+                    domain_obj_id=id_map.get(a.get("domain")) if a.get("domain") else None,
+                )
             )
-            for a in e.get("attributes", [])
-        ]
 
         keys = [
             Key(
@@ -104,7 +129,7 @@ def synth_catalog_from_json(data: dict[str, Any]) -> CatalogSnapshot:
         )
 
     for r in data.get("relationships", []):
-        if r["parent"] in id_map and r["child"] in id_map:
+        if r.get("parent") in id_map and r.get("child") in id_map:
             fk_rels.append(
                 Relationship(
                     parent_obj_id=id_map[r["parent"]],

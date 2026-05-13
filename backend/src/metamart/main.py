@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from metamart.config import get_settings
 from metamart.mart.router import router as mart_router
+from metamart.quality.router import router as quality_router
 
 settings = get_settings()
 
@@ -12,6 +13,7 @@ app = FastAPI(
 )
 
 app.include_router(mart_router, prefix=settings.api_v1_prefix)
+app.include_router(quality_router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/healthz", tags=["meta"])

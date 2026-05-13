@@ -41,6 +41,66 @@ uvicorn metamart.main:app --reload
 
 API at http://localhost:8000, docs at http://localhost:8000/docs.
 
+## Score your own model
+
+Both paths use the Default rule pack and require no DB.
+
+**CLI** (prints to stdout):
+```sh
+cd backend
+python score.py path/to/your_model.json
+```
+
+**API**:
+```sh
+curl -s -X POST http://localhost:8000/api/v1/quality/score-json \
+  -H "Content-Type: application/json" \
+  -d @path/to/your_model.json | jq
+```
+
+**JSON format** — same shape as `backend/seed_data/*.json`. Minimum:
+
+```jsonc
+{
+  "name": "My Model",
+  "model_type": "physical",            // logical | physical | lp
+  "domains": [                          // optional
+    {"id": "d_email", "name": "Email", "data_type": "VARCHAR(320)"}
+  ],
+  "glossary": [                         // optional
+    {"id": "g_customer", "name": "Customer",
+     "definition": "Someone who buys things.", "status": "approved"}
+  ],
+  "entities": [
+    {
+      "id": "e_customer",
+      "logical_name": "Customer",
+      "physical_name": "customer",
+      "glossary_terms": ["g_customer"],
+      "attributes": [
+        {"id": "a1", "logical_name": "Customer Id",
+         "physical_name": "customer_id", "data_type": "BIGINT",
+         "is_nullable": false, "position": 1},
+        {"id": "a2", "logical_name": "Email",
+         "physical_name": "email", "data_type": "VARCHAR(320)",
+         "domain": "d_email", "is_nullable": false, "position": 2}
+      ],
+      "keys": [
+        {"id": "k1", "name": "pk_customer", "key_type": "PK", "members": ["a1"]}
+      ]
+    }
+  ],
+  "relationships": [                    // optional
+    {"id": "r1", "name": "customer_orders",
+     "parent": "e_customer", "child": "e_order",
+     "cardinality": "one_to_many", "is_identifying": false}
+  ],
+  "lineage": []                         // optional
+}
+```
+
+`id` strings are local references inside the JSON — used by `keys.members`, `relationships.parent/child`, `lineage.source/target`, etc. They don't need to be globally unique.
+
 ## Tests
 ```sh
 cd backend && pytest
