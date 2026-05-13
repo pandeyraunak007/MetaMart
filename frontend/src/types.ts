@@ -75,6 +75,10 @@ export interface AuditEvent {
   kind: AuditEventKind
   at: string          // ISO timestamp
   message: string
+  // For fix events: the rule_id(s) that were involved. Used to surface the
+  // verify hint from RULE_INFO under the audit entry. Optional + backward-
+  // compatible with events stored before this field existed.
+  rule_ids?: string[]
 }
 
 export interface SavedModel {

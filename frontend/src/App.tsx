@@ -39,10 +39,16 @@ export default function App() {
   // Tracks the most recent successful fix(es) for the inline post-fix banner.
   // Cleared on model change, Re-score, or explicit dismiss/Download so the
   // banner only nags about the *latest* batch of changes.
+  // For a single fix the banner shows rule info + before/after; for fix-all
+  // it shows the per-rule counts and the per-fix description list.
   const [lastFix, setLastFix] = useState<{
     modelId: string
     count: number
     description: string
+    // Single-fix: ruleId of the rule that was applied. Empty/null for fix-all.
+    ruleId?: string
+    // Fix-all: per-applied-fix records so we can group + show counts.
+    applied?: Array<{ rule_id: string; description: string }>
   } | null>(null)
 
   // Default the folder selection to the first folder of the first library so
@@ -155,7 +161,8 @@ export default function App() {
           selected.model.id,
           resp.catalog,
           resp.result,
-          `Fix: ${resp.description}`
+          `Fix: ${resp.description}`,
+          [ruleId]
         )
       )
       if (ok) {
@@ -163,6 +170,7 @@ export default function App() {
           modelId: selected.model.id,
           count: 1,
           description: resp.description,
+          ruleId,
         })
       }
     } catch (e) {
@@ -184,13 +192,15 @@ export default function App() {
         return
       }
       const summary = `Fix-all: applied ${resp.applied.length} fix${resp.applied.length === 1 ? '' : 'es'}`
+      const uniqueRuleIds = Array.from(new Set(resp.applied.map((a) => a.rule_id)))
       const ok = persist(
         updateModelCatalog(
           state,
           selected.model.id,
           resp.catalog,
           resp.result,
-          summary
+          summary,
+          uniqueRuleIds
         )
       )
       if (ok) {
@@ -198,6 +208,10 @@ export default function App() {
           modelId: selected.model.id,
           count: resp.applied.length,
           description: summary,
+          applied: resp.applied.map((a) => ({
+            rule_id: a.rule_id,
+            description: a.description,
+          })),
         })
       }
     } catch (e) {

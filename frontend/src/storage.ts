@@ -246,7 +246,8 @@ export function updateModelCatalog(
   modelId: string,
   newCatalog: unknown,
   newScan: ScanResult,
-  auditMessage: string
+  auditMessage: string,
+  auditRuleIds?: string[]
 ): MartState {
   return mapModel(state, modelId, (m) => ({
     ...m,
@@ -256,7 +257,7 @@ export function updateModelCatalog(
       MAX_SCANS_PER_MODEL
     ),
     audit: cap(
-      [audit('model_scored', auditMessage), ...m.audit],
+      [audit('model_scored', auditMessage, auditRuleIds), ...m.audit],
       MAX_AUDIT_EVENTS_PER_MODEL
     ),
     updated_at: nowIso(),
@@ -331,8 +332,14 @@ export function latestScan(model: SavedModel): Scan | null {
 
 // ── internals ─────────────────────────────────────────────────
 
-function audit(kind: AuditEventKind, message: string): AuditEvent {
-  return { id: uid('evt'), kind, at: nowIso(), message }
+function audit(
+  kind: AuditEventKind,
+  message: string,
+  ruleIds?: string[]
+): AuditEvent {
+  const evt: AuditEvent = { id: uid('evt'), kind, at: nowIso(), message }
+  if (ruleIds && ruleIds.length) evt.rule_ids = ruleIds
+  return evt
 }
 
 function mapLibrary(

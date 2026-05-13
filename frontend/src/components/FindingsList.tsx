@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Dimension, Finding, Severity } from '../types'
+import { RULE_INFO } from '../ruleInfo'
 
 interface Props {
   findings: Finding[]
@@ -43,10 +44,23 @@ export default function FindingsList({
 }: Props) {
   const [sevFilter, setSevFilter] = useState<Set<Severity>>(new Set())
   const [dimFilter, setDimFilter] = useState<Set<Dimension>>(new Set())
+  // Per-finding expanded state, keyed by `${rule_id}::${target_obj_id}` so
+  // re-orderings (after a fix changes id ordering) don't accidentally collapse
+  // the wrong row.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const fixableCount = useMemo(
     () => findings.filter((f) => f.fixable).length,
     [findings]
   )
+
+  function toggleExpanded(key: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   // Active dimensions are derived from findings — only show chips for
   // dimensions that actually have findings to filter.
@@ -124,10 +138,26 @@ export default function FindingsList({
               {fixing ? 'Fixing…' : `Fix all auto-fixable (${fixableCount})`}
             </button>
           )}
+          {onFixAll && fixableCount === 0 && totalAll > 0 && (
+            <span
+              title="Auto-fix only covers naming rules today (snake_case, max length, reserved words). Other dimensions need manual review."
+              className="text-xs text-slate-500 italic"
+            >
+              No auto-fixes available
+            </span>
+          )}
         </div>
       </div>
       <p className="text-xs text-slate-500 mb-4">
         Grouped by dimension · sorted by severity
+        {fixableCount > 0 && (
+          <>
+            <span className="mx-1.5 text-slate-300">·</span>
+            <span className="text-emerald-700 font-medium">
+              {fixableCount} of {totalAll} have a one-click <span className="font-semibold">Fix</span>
+            </span>
+          </>
+        )}
       </p>
 
       {/* Filter chips */}
@@ -182,6 +212,7 @@ export default function FindingsList({
         )}
       </div>
 
+      {/* total shown / empty filtering case */}
       {totalShown === 0 ? (
         <p className="text-sm text-slate-400 italic px-2 py-4 text-center">
           No findings match the current filters.
@@ -210,39 +241,59 @@ export default function FindingsList({
                     fixing &&
                     fixingTarget?.ruleId === f.rule_id &&
                     fixingTarget?.targetObjId === f.target_obj_id
+                  const expandKey = `${f.rule_id}::${f.target_obj_id}`
+                  const isOpen = expanded.has(expandKey)
                   return (
                     <li
                       key={i}
-                      className="flex gap-3 px-4 py-3 border-t border-slate-100 first:border-t-0"
+                      className="border-t border-slate-100 first:border-t-0"
                     >
-                      <span
-                        className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded ring-1 ring-inset text-[10px] font-bold uppercase tracking-wider h-fit mt-0.5 ${SEV_BADGE[f.severity]}`}
-                      >
-                        {f.severity}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        {f.target_name && (
-                          <p className="text-[11px] font-mono text-slate-500 mb-0.5">
-                            {f.target_name}
-                          </p>
-                        )}
-                        <p className="text-sm text-slate-900 leading-relaxed">{f.message}</p>
-                        {f.remediation && (
-                          <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                            → {f.remediation}
-                          </p>
-                        )}
-                        <p className="text-[10px] font-mono text-slate-400 mt-1">{f.rule_id}</p>
-                      </div>
-                      {f.fixable && onFix && (
-                        <button
-                          onClick={() => void onFix(f.rule_id, f.target_obj_id)}
-                          disabled={fixing}
-                          title="Apply auto-fix"
-                          className="shrink-0 self-start rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-wait transition-colors"
+                      <div className="flex gap-3 px-4 py-3">
+                        <span
+                          className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded ring-1 ring-inset text-[10px] font-bold uppercase tracking-wider h-fit mt-0.5 ${SEV_BADGE[f.severity]}`}
                         >
-                          {isThisFixing ? 'Fixing…' : 'Fix'}
-                        </button>
+                          {f.severity}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          {f.target_name && (
+                            <p className="text-[11px] font-mono text-slate-500 mb-0.5">
+                              {f.target_name}
+                            </p>
+                          )}
+                          <p className="text-sm text-slate-900 leading-relaxed">{f.message}</p>
+                          {f.remediation && (
+                            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                              → {f.remediation}
+                            </p>
+                          )}
+                          <div className="mt-1 flex items-center gap-3">
+                            <p className="text-[10px] font-mono text-slate-400">{f.rule_id}</p>
+                            <button
+                              onClick={() => toggleExpanded(expandKey)}
+                              className="text-[10px] text-slate-500 hover:text-slate-800 transition-colors inline-flex items-center gap-0.5"
+                              aria-expanded={isOpen}
+                            >
+                              <InfoIcon />
+                              {isOpen ? 'Hide details' : 'What does this mean?'}
+                            </button>
+                          </div>
+                        </div>
+                        {f.fixable && onFix && (
+                          <button
+                            onClick={() => void onFix(f.rule_id, f.target_obj_id)}
+                            disabled={fixing}
+                            title="Apply auto-fix"
+                            className="shrink-0 self-start rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-wait transition-colors"
+                          >
+                            {isThisFixing ? 'Fixing…' : 'Fix'}
+                          </button>
+                        )}
+                      </div>
+                      {isOpen && (
+                        <RuleInfoPanel
+                          ruleId={f.rule_id}
+                          fixable={f.fixable}
+                        />
                       )}
                     </li>
                   )
@@ -252,6 +303,76 @@ export default function FindingsList({
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function InfoIcon() {
+  return (
+    <svg
+      className="h-3 w-3"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="16" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
+    </svg>
+  )
+}
+
+function RuleInfoPanel({ ruleId, fixable }: { ruleId: string; fixable: boolean }) {
+  const info = RULE_INFO[ruleId]
+  if (!info) {
+    return (
+      <div className="px-4 pb-3 pt-1 text-xs text-slate-500 italic">
+        No rule info recorded for <code className="font-mono">{ruleId}</code>.
+      </div>
+    )
+  }
+  return (
+    <div className="mx-4 mb-3 mt-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed space-y-2">
+      <Row label="What this checks">{info.summary}</Row>
+      {info.impact && <Row label="Why it matters">{info.impact}</Row>}
+      {info.fixSummary && (
+        <Row label="What the auto-fix does">
+          {info.fixSummary}
+          {info.examples && info.examples.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5">
+              {info.examples.map((ex, i) => (
+                <li key={i} className="font-mono text-[11px] text-slate-600">
+                  <span className="text-slate-400">{ex.before}</span>
+                  <span className="mx-1.5 text-emerald-600">→</span>
+                  <span className="text-slate-900">{ex.after}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Row>
+      )}
+      {!fixable && !info.fixSummary && (
+        <Row label="Auto-fix">
+          <span className="text-slate-500 italic">
+            Not available for this rule — needs manual review.
+          </span>
+        </Row>
+      )}
+      <Row label="How to verify">{info.verify}</Row>
+    </div>
+  )
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        {label}
+      </p>
+      <div className="text-slate-700 mt-0.5">{children}</div>
     </div>
   )
 }

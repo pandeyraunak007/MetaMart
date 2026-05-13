@@ -6,8 +6,16 @@ import RadarPanel from './RadarPanel'
 import SubScoreList from './SubScoreList'
 import FindingsList from './FindingsList'
 import Sparkline from './Sparkline'
+import { RULE_INFO, parseFixDescription } from '../ruleInfo'
 
 type Tab = 'overview' | 'score' | 'versions' | 'audit'
+
+export interface LastFix {
+  count: number
+  description: string
+  ruleId?: string
+  applied?: Array<{ rule_id: string; description: string }>
+}
 
 interface Props {
   model: SavedModel
@@ -16,7 +24,7 @@ interface Props {
   fixingTarget: { ruleId: string; targetObjId: number } | null
   // The latest fix the user applied (Fix or Fix-all). Drives the post-fix
   // banner above the findings list with a prominent Download button.
-  lastFix: { count: number; description: string } | null
+  lastFix: LastFix | null
   onDismissLastFix: () => void
   onRescore: () => void
   onRename: (name: string) => void
@@ -231,7 +239,7 @@ function ScoreTab({
   onFixAll: () => Promise<void> | void
   fixing: boolean
   fixingTarget: { ruleId: string; targetObjId: number } | null
-  lastFix: { count: number; description: string } | null
+  lastFix: LastFix | null
   onDownload: () => void
   onDismissLastFix: () => void
   onOpenAudit: () => void
@@ -272,7 +280,7 @@ function PostFixBanner({
   onDismiss,
   onOpenAudit,
 }: {
-  fix: { count: number; description: string }
+  fix: LastFix
   grade: string
   composite: number
   onDownload: () => void
@@ -283,6 +291,22 @@ function PostFixBanner({
     fix.count > 1
       ? `Applied ${fix.count} fixes. Score is now ${grade} (${composite.toFixed(2)}).`
       : `Fix applied. Score is now ${grade} (${composite.toFixed(2)}).`
+
+  // Single-fix path: parse the description into structured before/after.
+  const single =
+    fix.count === 1 ? parseFixDescription(fix.description) : null
+  const singleRule = fix.ruleId ? RULE_INFO[fix.ruleId] : undefined
+
+  // Fix-all path: bucket the applied fixes by rule_id.
+  const byRule = new Map<string, Array<{ description: string }>>()
+  if (fix.applied) {
+    for (const a of fix.applied) {
+      const arr = byRule.get(a.rule_id) ?? []
+      arr.push({ description: a.description })
+      byRule.set(a.rule_id, arr)
+    }
+  }
+
   return (
     <div
       role="status"
@@ -291,16 +315,78 @@ function PostFixBanner({
       <div className="shrink-0 mt-0.5 h-9 w-9 rounded-full bg-emerald-500 flex items-center justify-center text-white">
         <CheckIcon />
       </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-emerald-900">{headline}</p>
-        {fix.count === 1 && (
-          <p className="text-xs text-emerald-800 mt-0.5 truncate">{fix.description}</p>
+      <div className="flex-1 min-w-0 space-y-3">
+        <div>
+          <p className="text-sm font-semibold text-emerald-900">{headline}</p>
+          <p className="text-xs text-emerald-700/80 mt-1">
+            Your saved model now reflects these changes. Download the JSON to
+            use it (the file stays in its original format).
+          </p>
+        </div>
+
+        {/* Single-fix detail panel */}
+        {single && (
+          <div className="rounded-md bg-white/60 border border-emerald-200/60 p-3 text-xs space-y-1.5">
+            <div>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                {single.verb} {single.kind}
+              </span>
+            </div>
+            <div className="font-mono text-[11px] flex flex-wrap items-center gap-2">
+              <span className="rounded bg-red-50 text-red-800 ring-1 ring-red-200 px-1.5 py-0.5 line-through decoration-red-400/60">
+                {single.before}
+              </span>
+              <span className="text-emerald-600">→</span>
+              <span className="rounded bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300 px-1.5 py-0.5 font-semibold">
+                {single.after}
+              </span>
+            </div>
+            {singleRule && (
+              <p className="text-emerald-900/80 leading-relaxed">
+                <span className="font-semibold">Verify:</span> {singleRule.verify}
+              </p>
+            )}
+            {fix.ruleId && (
+              <p className="text-[10px] font-mono text-emerald-700/60">{fix.ruleId}</p>
+            )}
+          </div>
         )}
-        <p className="text-xs text-emerald-700/80 mt-2">
-          Your saved model now reflects these changes. Download the JSON to use
-          it (the file stays in its original format).
-        </p>
-        <div className="mt-3 flex items-center gap-2">
+
+        {/* Fix-all summary by rule */}
+        {!single && byRule.size > 0 && (
+          <div className="rounded-md bg-white/60 border border-emerald-200/60 p-3 text-xs space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+              By rule
+            </p>
+            <ul className="space-y-1.5">
+              {[...byRule.entries()].map(([ruleId, applied]) => {
+                const info = RULE_INFO[ruleId]
+                return (
+                  <li key={ruleId} className="leading-relaxed">
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-mono text-[11px] text-emerald-900 font-semibold">
+                        {ruleId}
+                      </span>
+                      <span className="text-[11px] text-emerald-700">
+                        {applied.length} fix{applied.length === 1 ? '' : 'es'}
+                      </span>
+                    </div>
+                    {info && (
+                      <p className="text-emerald-900/80 mt-0.5">
+                        <span className="font-semibold">Verify:</span> {info.verify}
+                      </p>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+            <p className="text-[10px] text-emerald-800/70 italic">
+              Open the Audit tab for the per-fix descriptions.
+            </p>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
           <button
             onClick={onDownload}
             className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors shadow-sm inline-flex items-center gap-1.5"
@@ -458,22 +544,49 @@ function AuditTab({ model }: { model: SavedModel }) {
   }
   return (
     <ol className="max-w-3xl space-y-3">
-      {model.audit.map((evt) => (
-        <li
-          key={evt.id}
-          className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm"
-        >
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-xs uppercase tracking-wider font-semibold text-slate-500">
-              {evt.kind.replace(/_/g, ' ')}
-            </span>
-            <span className="text-xs text-slate-400 font-mono">
-              {fmtDate(evt.at)}
-            </span>
-          </div>
-          <p className="text-sm text-slate-800 mt-1">{evt.message}</p>
-        </li>
-      ))}
+      {model.audit.map((evt) => {
+        const isFixEvent = /^Fix(?:-all)?:/i.test(evt.message)
+        // For fix events, gather the verify hints from any rules tagged on
+        // the event (de-duped). Older events stored without rule_ids fall
+        // back to a generic note that links the user to the docs.
+        const verifyHints = (evt.rule_ids ?? [])
+          .map((id) => RULE_INFO[id])
+          .filter((info): info is NonNullable<typeof info> => !!info)
+        return (
+          <li
+            key={evt.id}
+            className={`rounded-lg border px-4 py-3 shadow-sm ${
+              isFixEvent
+                ? 'border-emerald-200 bg-emerald-50/40'
+                : 'border-slate-200 bg-white'
+            }`}
+          >
+            <div className="flex items-baseline justify-between gap-3">
+              <span
+                className={`text-xs uppercase tracking-wider font-semibold ${
+                  isFixEvent ? 'text-emerald-700' : 'text-slate-500'
+                }`}
+              >
+                {isFixEvent ? 'fix' : evt.kind.replace(/_/g, ' ')}
+              </span>
+              <span className="text-xs text-slate-400 font-mono">
+                {fmtDate(evt.at)}
+              </span>
+            </div>
+            <p className="text-sm text-slate-800 mt-1">{evt.message}</p>
+            {isFixEvent && verifyHints.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-emerald-200/60 space-y-1.5">
+                {verifyHints.map((info, i) => (
+                  <div key={i} className="text-xs text-emerald-900/80 leading-relaxed">
+                    <span className="font-semibold">Verify ({evt.rule_ids?.[i]}):</span>{' '}
+                    {info.verify}
+                  </div>
+                ))}
+              </div>
+            )}
+          </li>
+        )
+      })}
     </ol>
   )
 }
