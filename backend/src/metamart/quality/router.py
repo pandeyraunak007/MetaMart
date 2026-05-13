@@ -2,7 +2,7 @@
 DB-backed scan/snapshot endpoints land in M5."""
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Body, HTTPException, status
 
 import metamart.quality  # noqa: F401  -- registers all built-in rules
 
@@ -16,11 +16,25 @@ router = APIRouter(prefix="/quality", tags=["quality"])
 
 
 @router.post("/score-json", response_model=ScanResultRead)
-def api_score_json(catalog: dict[str, Any]) -> ScanResultRead:
-    """Score a user-supplied catalog JSON using the Default rule pack.
+def api_score_json(catalog: Any = Body(...)) -> ScanResultRead:
+    """Score a user-supplied catalog using the Default rule pack.
 
-    No DB write, no auth. Body shape: same as `backend/seed_data/*.json`.
+    Accepts either:
+    - a full catalog object `{name, model_type, entities: [...]}`, OR
+    - a bare list `[{entity}, {entity}, ...]` (auto-wrapped as
+      `{"entities": [...]}` for convenience).
+
+    No DB, no auth. Body shape: see `backend/seed_data/*.json`.
     """
+    if isinstance(catalog, list):
+        catalog = {"entities": catalog}
+    if not isinstance(catalog, dict):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "body must be a JSON object (a catalog) or a JSON list (entities); "
+            f"got {type(catalog).__name__}",
+        )
+
     try:
         snapshot = catalog_from_json(catalog)
     except (KeyError, TypeError, ValueError) as exc:
