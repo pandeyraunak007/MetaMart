@@ -715,14 +715,24 @@ def _has_attr_collection(obj: dict) -> bool:
             if isinstance(coll, list) and coll and any(isinstance(x, dict) for x in coll):
                 return True
             if isinstance(coll, dict) and coll:
-                return True
+                # erwin nested wrapper: {Attribute: [...]} or {Column: [...]}
+                for inner in _ATTR_INNER_KEYS:
+                    if inner in coll:
+                        inner_v = coll[inner]
+                        if isinstance(inner_v, list) and inner_v:
+                            return True
+                        if isinstance(inner_v, dict):
+                            return True
+                # columns-as-dict pattern (dbt-like)
+                if all(isinstance(v, dict) for v in coll.values()):
+                    return True
     return False
 
 
 def _walk_for_entities(
     data: Any,
     key_hint: str = "",
-    max_depth: int = 6,
+    max_depth: int = 10,
     seen_physicals: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Best-effort: find any dict with a name + column-like collection."""
@@ -757,6 +767,10 @@ def _extract_entity(obj: dict, key_hint: str, idx: int) -> dict[str, Any]:
         if k in obj:
             cols = obj[k]
             break
+
+    # Unwrap erwin-style nested wrapper {Attributes: {Attribute: [...]}}
+    if isinstance(cols, dict) and any(ik in cols for ik in _ATTR_INNER_KEYS):
+        cols = _flatten_collection(cols, _ATTR_INNER_KEYS)
 
     attributes: list[dict[str, Any]] = []
     if isinstance(cols, list):

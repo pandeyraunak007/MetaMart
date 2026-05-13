@@ -37,7 +37,10 @@ export default function App() {
 
         {error && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
-            <strong className="font-semibold">Error:</strong> {error}
+            <strong className="font-semibold">Error:</strong>
+            <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
+              {error}
+            </pre>
           </div>
         )}
 

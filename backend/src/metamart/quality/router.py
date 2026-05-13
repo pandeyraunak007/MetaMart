@@ -24,15 +24,20 @@ def api_score_json(catalog: Any = Body(...)) -> ScanResultRead:
     only item looks like a whole-catalog wrapper (e.g. erwin "Save As JSON"
     files) is unwrapped; other lists are treated as a bare entities array.
     """
+    original = catalog
     catalog = _coerce_to_catalog(catalog)
 
     try:
         snapshot = catalog_from_json(catalog)
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"invalid catalog: {exc}",
-        ) from exc
+        # Attach a structural fingerprint of the original payload so the
+        # caller can see WHAT we received and diagnose unsupported shapes
+        # without making a separate /inspect call.
+        detail = {
+            "message": f"invalid catalog: {exc}",
+            "shape": _describe_shape(original),
+        }
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail) from exc
 
     result = score_catalog(snapshot, default_pack())
     return _to_schema(result)

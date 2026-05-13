@@ -55,7 +55,12 @@ def test_score_json_rejects_missing_required_keys() -> None:
     client = TestClient(app)
     resp = client.post("/api/v1/quality/score-json", json={"description": "nope"})
     assert resp.status_code == 400
-    assert "name" in resp.json()["detail"].lower()
+    detail = resp.json()["detail"]
+    # Error response now includes a structural fingerprint alongside the message.
+    assert isinstance(detail, dict)
+    assert "message" in detail
+    assert "entities" in detail["message"].lower()
+    assert "shape" in detail
 
 
 def test_score_json_rejects_non_object_body() -> None:

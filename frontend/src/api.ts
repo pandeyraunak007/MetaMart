@@ -14,8 +14,10 @@ function formatErrorDetail(raw: string): string {
     return raw
   }
 
-  // FastAPI returns { detail: string } for HTTPException
-  // and { detail: ValidationError[] } for 422 request-validation failures.
+  // FastAPI returns { detail: string } for HTTPException with a string,
+  // { detail: ValidationError[] } for 422 request-validation failures,
+  // and { detail: {message, shape} } when our /score-json wants to include
+  // a structural fingerprint of the rejected payload.
   if (parsed && typeof parsed === 'object' && 'detail' in parsed) {
     const detail = (parsed as { detail: unknown }).detail
     if (typeof detail === 'string') return detail
@@ -27,6 +29,14 @@ function formatErrorDetail(raw: string): string {
           return where ? `${msg} (at ${where})` : msg
         })
         .join('; ')
+    }
+    if (detail && typeof detail === 'object' && 'message' in detail) {
+      const d = detail as { message: string; shape?: unknown }
+      let out = d.message
+      if (d.shape !== undefined) {
+        out += `\n\nReceived JSON shape:\n${JSON.stringify(d.shape, null, 2)}`
+      }
+      return out
     }
     return JSON.stringify(detail)
   }
