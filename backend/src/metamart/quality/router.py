@@ -65,6 +65,10 @@ def api_inspect(payload: Any = Body(...)) -> dict[str, Any]:
 def _coerce_to_catalog(catalog: Any) -> Any:
     """Normalize the request body into a dict-shaped catalog.
 
+    - If it's an erwin DM internal flat-array (a top-level list of polymorphic
+      `{O_Id, O_Type, Properties, ...}` objects, optionally led by a
+      `{Version, Encoding, Description}` header), wrap the whole list under a
+      sentinel key so `normalize_catalog` can adapt it.
     - If it's a single-element list whose only item looks like a whole catalog
       wrapper (erwin `{version, Encoding, Description, Objects, ...}` etc.),
       unwrap it.
@@ -72,8 +76,10 @@ def _coerce_to_catalog(catalog: Any) -> Any:
     - If it's neither dict nor list, raise 400.
     """
     if isinstance(catalog, list):
+        if _is_erwin_native_array(catalog):
+            return {"_erwin_native_objects": catalog}
         if (
-            len(catalog) >= 1
+            len(catalog) == 1
             and isinstance(catalog[0], dict)
             and looks_like_catalog_wrapper(catalog[0])
         ):
@@ -86,6 +92,24 @@ def _coerce_to_catalog(catalog: Any) -> Any:
             f"got {type(catalog).__name__}",
         )
     return catalog
+
+
+def _is_erwin_native_array(data: list) -> bool:
+    """True if a top-level list looks like erwin DM's internal flat-array format."""
+    if not data:
+        return False
+    body_start = 0
+    first = data[0]
+    if (
+        isinstance(first, dict)
+        and isinstance(first.get("Description"), str)
+        and "erwin" in first["Description"].lower()
+    ):
+        body_start = 1
+    sample = [x for x in data[body_start : body_start + 5] if isinstance(x, dict)]
+    if not sample:
+        return False
+    return all("O_Id" in x and "O_Type" in x for x in sample)
 
 
 def _describe_shape(data: Any, depth: int = 0, max_depth: int = 5) -> Any:

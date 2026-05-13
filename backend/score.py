@@ -44,7 +44,9 @@ def main(argv: list[str]) -> int:
 
     result = score_catalog(catalog, default_pack())
 
-    print(f"Model:     {data.get('name', '?')}")
+    model_name = data.get("name") if isinstance(data, dict) else None
+    print(f"Model:     {model_name or '(from adapter)'}")
+    print(f"Entities:  {len(catalog.entities)}")
     print(f"Composite: {result.composite_score:6.2f}   Grade: {result.grade}")
     print()
     print("Sub-scores:")

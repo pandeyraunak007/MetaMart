@@ -2,12 +2,14 @@
 
 Detection cascade (most specific → most general):
   1. Native MetaMart shape — passthrough.
-  2. erwin Data Modeler exports — PascalCase keys, `Entities`/`Attributes`.
-  3. Generic SQL-ish dumps — `{tables: [{name, columns: [...]}]}`.
-  4. dbt manifest.json — `{metadata, nodes: {id: {columns: {...}}}}`.
-  5. erwin DAS-style polymorphic — `{objects: [{type: "Entity"|"Relationship"}]}`.
-  6. OpenAPI / JSON Schema — `{components: {schemas: {Name: {properties: ...}}}}`.
-  7. Generic recursive walker — finds any dict with a name + column-like collection.
+  2. erwin DM internal flat-array — `[{Version, Description}, {O_Id, O_Type, Properties}, ...]`
+     (the format produced by erwin's "Save Model As JSON" with metadata header).
+  3. erwin Data Modeler exports — PascalCase keys, `Entities`/`Attributes`.
+  4. Generic SQL-ish dumps — `{tables: [{name, columns: [...]}]}`.
+  5. dbt manifest.json — `{metadata, nodes: {id: {columns: {...}}}}`.
+  6. erwin DAS-style polymorphic — `{objects: [{type: "Entity"|"Relationship"}]}`.
+  7. OpenAPI / JSON Schema — `{components: {schemas: {Name: {properties: ...}}}}`.
+  8. Generic recursive walker — finds any dict with a name + column-like collection.
 
 Anything that still doesn't match falls through and `catalog_from_json` raises
 an informative error listing the actual top-level keys seen.
@@ -79,8 +81,20 @@ def normalize_catalog(data: Any) -> Any:
     run as a last resort. We then pick the candidate with the most entities
     (a stronger signal of a correct match than just shape recognition).
     """
+    # erwin DM internal format is a top-level list, not a dict — handle first.
+    if isinstance(data, list):
+        if _looks_like_erwin_native_list(data):
+            adapted = _adapt_erwin_native_list(data)
+            if adapted.get("entities"):
+                return adapted
+        return data
     if not isinstance(data, dict):
         return data
+    # Same erwin native list, but wrapped under a sentinel key by the router.
+    if isinstance(data.get("_erwin_native_objects"), list):
+        adapted = _adapt_erwin_native_list(data["_erwin_native_objects"])
+        if adapted.get("entities"):
+            return adapted
     if "entities" in data and isinstance(data["entities"], list):
         return data
 
@@ -800,4 +814,281 @@ def _extract_entity(obj: dict, key_hint: str, idx: int) -> dict[str, Any]:
         "physical_name": str(physical),
         "attributes": attributes,
         "keys": [],
+    }
+
+
+# ── erwin DM internal flat-array adapter ─────────────────────
+#
+# The format produced by erwin DM 12.5 / 15.x "Save Model As JSON":
+#   [{Version, Encoding, Description}, {O_Id, O_Type, Parent_Id, Name, Properties}, ...]
+# Items 1..N are polymorphic typed objects keyed by numeric `O_Type` codes,
+# with values stored under numeric `Properties` keys as `[value, "kType"]`
+# tuples. We don't attempt to handle every erwin object kind — only the bits
+# the quality engine cares about: entities, attributes, keys, relationships.
+
+# Type codes observed in the wild (eMovies / EMOVIES sample models). erwin
+# assigns these from a fixed internal ontology, so they're stable across files.
+_ERWIN_TYPE_ENTITY = {"1075838979", "1075839059"}     # entity / view-like entity
+_ERWIN_TYPE_ATTRIBUTE = "1075838981"
+_ERWIN_TYPE_KEY = "1075838985"
+_ERWIN_TYPE_KEY_MEMBER = "1075838986"
+_ERWIN_TYPE_RELATIONSHIP = "1075839016"
+_ERWIN_TYPE_MODEL_ROOT = "1075838978"
+
+# Property IDs inside an object's `Properties` map.
+_ERWIN_PROP_DESCRIPTION = "1073742125"
+_ERWIN_PROP_NAME = "1073742126"            # the canonical "Name" override
+_ERWIN_PROP_LENGTH = "1075848978"          # int — VARCHAR(N)
+_ERWIN_PROP_DATATYPE = "1075849056"        # str — "varchar", "int", ...
+_ERWIN_PROP_KEY_TYPE_CODE = "1075849004"   # str — "PK" / "AK1" / "IE1"
+_ERWIN_PROP_REL_PARENT = "1075849763"      # parent entity O_Id
+_ERWIN_PROP_REL_CHILD = "1075849764"       # child entity O_Id
+_ERWIN_PROP_REL_VERB = "1075849158"        # parent→child verb phrase
+_ERWIN_PROP_KEY_MEMBER_ATTR = "1075849017" # member's referenced attribute O_Id
+
+
+def _looks_like_erwin_native_list(data: Any) -> bool:
+    """Detect erwin DM internal flat-array format.
+
+    Two valid layouts: with a leading metadata header, or without one. We
+    require the first 1-3 items to look unmistakably erwin: a Description
+    string mentioning "erwin", or items carrying both `O_Id` and `O_Type`.
+    """
+    if not isinstance(data, list) or not data:
+        return False
+    first = data[0]
+    head_is_marker = (
+        isinstance(first, dict)
+        and "Description" in first
+        and isinstance(first["Description"], str)
+        and "erwin" in first["Description"].lower()
+    )
+    body_start = 1 if head_is_marker else 0
+    sample = [x for x in data[body_start : body_start + 5] if isinstance(x, dict)]
+    if not sample:
+        return False
+    return all("O_Id" in x and "O_Type" in x for x in sample)
+
+
+def _erwin_prop(obj: dict, prop_id: str) -> Any:
+    """Read a value out of the typed `Properties` dict.
+
+    Each property is `[value, "kType"]`. We just want the first slot.
+    """
+    props = obj.get("Properties")
+    if not isinstance(props, dict):
+        return None
+    raw = props.get(prop_id)
+    if isinstance(raw, list) and raw:
+        return raw[0]
+    return raw
+
+
+def _erwin_attr_name(attr: dict, member_name_by_oid: dict[str, str]) -> str:
+    """Best-effort name resolution for an erwin attribute object.
+
+    Many attribute objects use a template like `%Lower(%EntityName %AttDomain)`
+    in their `Name` field — that's an erwin naming-rule expression, not a real
+    name. The actual name lives in either Property 1073742126, the description,
+    or (most reliably for templated attributes) the spelled-out `Name` of any
+    key member that references this attribute.
+    """
+    prop_name = _erwin_prop(attr, _ERWIN_PROP_NAME)
+    if isinstance(prop_name, str) and prop_name and "%" not in prop_name:
+        return prop_name
+    raw_name = attr.get("Name", "")
+    if isinstance(raw_name, str) and raw_name and "%" not in raw_name:
+        return raw_name
+    via_member = member_name_by_oid.get(attr.get("O_Id", ""))
+    if via_member:
+        return via_member
+    desc = _erwin_prop(attr, _ERWIN_PROP_DESCRIPTION)
+    if isinstance(desc, str) and desc:
+        return desc[:60].strip()
+    return raw_name or f"attr_{attr.get('O_Id', '?')}"
+
+
+def _erwin_attr_datatype(attr: dict) -> str:
+    base = _erwin_prop(attr, _ERWIN_PROP_DATATYPE)
+    length = _erwin_prop(attr, _ERWIN_PROP_LENGTH)
+    if not base:
+        return "VARCHAR(255)"
+    base_str = str(base).upper()
+    try:
+        n = int(str(length))
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0 and base_str in {"VARCHAR", "CHAR", "NVARCHAR", "NCHAR", "VARCHAR2"}:
+        return f"{base_str}({n})"
+    return base_str
+
+
+def _erwin_key_type(key: dict) -> str:
+    """Map erwin key-type code to PK / AK / IE."""
+    code = _erwin_prop(key, _ERWIN_PROP_KEY_TYPE_CODE)
+    if isinstance(code, str):
+        upper = code.strip().upper()
+        if upper == "PK" or upper.startswith("PRIMARY"):
+            return "PK"
+        if upper.startswith("AK"):
+            return "AK"
+        if upper.startswith("IE"):
+            return "IE"
+    # Fall back to inferring from the conventional name prefix (XPK/XAK/XIE).
+    name = key.get("Name", "")
+    if isinstance(name, str):
+        nm = name.upper()
+        if nm.startswith("XPK"):
+            return "PK"
+        if nm.startswith("XAK"):
+            return "AK"
+        if nm.startswith("XIE"):
+            return "IE"
+    return "PK"
+
+
+def _adapt_erwin_native_list(items: list[Any]) -> dict[str, Any]:
+    """Convert an erwin DM internal flat-array into a native catalog dict."""
+    # Build parent → children index. O_Ids are NOT guaranteed unique across the
+    # whole file (different schema namespaces reuse them), so we don't rely on
+    # a global by_oid map — only on Parent_Id chains within a single subtree.
+    children: dict[str, list[dict]] = {}
+    typed: list[dict] = []
+    for it in items:
+        if not isinstance(it, dict) or "O_Type" not in it:
+            continue
+        typed.append(it)
+        pid = it.get("Parent_Id")
+        if pid:
+            children.setdefault(pid, []).append(it)
+
+    # Model name comes from the lone Model-root object, falling back to the
+    # leading description header.
+    model_name = None
+    for it in typed:
+        if it.get("O_Type") == _ERWIN_TYPE_MODEL_ROOT and it.get("Name"):
+            model_name = str(it["Name"])
+            break
+    if not model_name and isinstance(items[0], dict):
+        desc = items[0].get("Description")
+        if isinstance(desc, str):
+            model_name = desc[:80]
+    model_name = model_name or "erwin model"
+
+    entity_objs = [it for it in typed if it.get("O_Type") in _ERWIN_TYPE_ENTITY]
+    real_entity_oids = {e["O_Id"] for e in entity_objs}
+
+    entities: list[dict[str, Any]] = []
+    # Map (entity_local_id) for cross-referencing in relationships.
+    entity_local_id_by_oid: dict[str, str] = {}
+
+    for idx, e in enumerate(entity_objs):
+        e_oid = e["O_Id"]
+        e_name = e.get("Name") or f"Entity_{idx}"
+        local_id = f"e_{_slug(e_name)}_{idx}"
+        entity_local_id_by_oid[e_oid] = local_id
+
+        kids = children.get(e_oid, [])
+
+        # Pass 1: collect keys + their members so member names can rescue
+        # attribute names that are stored as templates.
+        key_objs = [k for k in kids if k.get("O_Type") == _ERWIN_TYPE_KEY]
+        member_name_by_attr_oid: dict[str, str] = {}
+        for k in key_objs:
+            for m in children.get(k["O_Id"], []):
+                if m.get("O_Type") != _ERWIN_TYPE_KEY_MEMBER:
+                    continue
+                attr_oid = _erwin_prop(m, _ERWIN_PROP_KEY_MEMBER_ATTR)
+                m_name = m.get("Name")
+                if attr_oid and isinstance(m_name, str) and m_name:
+                    member_name_by_attr_oid.setdefault(str(attr_oid), m_name)
+
+        # Pass 2: attributes.
+        attr_objs = [a for a in kids if a.get("O_Type") == _ERWIN_TYPE_ATTRIBUTE]
+        attributes: list[dict[str, Any]] = []
+        local_attr_id_by_oid: dict[str, str] = {}
+        for j, a in enumerate(attr_objs):
+            name = _erwin_attr_name(a, member_name_by_attr_oid)
+            local_attr_id = f"{local_id}_a{j}"
+            local_attr_id_by_oid[a["O_Id"]] = local_attr_id
+            attributes.append(
+                {
+                    "id": local_attr_id,
+                    "logical_name": name,
+                    "physical_name": _slug(name),
+                    "data_type": _erwin_attr_datatype(a),
+                    "is_nullable": True,
+                    "position": j + 1,
+                }
+            )
+
+        # Pass 3: keys → resolve member O_Ids back to local attribute IDs.
+        keys: list[dict[str, Any]] = []
+        for kx, k in enumerate(key_objs):
+            k_type = _erwin_key_type(k)
+            members: list[str] = []
+            for m in children.get(k["O_Id"], []):
+                if m.get("O_Type") != _ERWIN_TYPE_KEY_MEMBER:
+                    continue
+                attr_oid = _erwin_prop(m, _ERWIN_PROP_KEY_MEMBER_ATTR)
+                if attr_oid and str(attr_oid) in local_attr_id_by_oid:
+                    members.append(local_attr_id_by_oid[str(attr_oid)])
+                    continue
+                # Fall back to matching by spelled-out member name.
+                m_name = m.get("Name")
+                if isinstance(m_name, str):
+                    for at in attributes:
+                        if at["logical_name"] == m_name or at["physical_name"] == _slug(m_name):
+                            members.append(at["id"])
+                            break
+            if not members:
+                continue
+            keys.append(
+                {
+                    "id": f"{local_id}_k{kx}",
+                    "name": k.get("Name") or f"{k_type.lower()}_{e_name}",
+                    "key_type": k_type,
+                    "members": members,
+                }
+            )
+
+        entities.append(
+            {
+                "id": local_id,
+                "logical_name": str(e_name),
+                "physical_name": _slug(e_name),
+                "attributes": attributes,
+                "keys": keys,
+            }
+        )
+
+    # Relationships: stand-alone objects whose Properties point to two entity O_Ids.
+    relationships: list[dict[str, Any]] = []
+    for rx, r in enumerate(typed):
+        if r.get("O_Type") != _ERWIN_TYPE_RELATIONSHIP:
+            continue
+        parent_oid = _erwin_prop(r, _ERWIN_PROP_REL_PARENT)
+        child_oid = _erwin_prop(r, _ERWIN_PROP_REL_CHILD)
+        parent_oid = str(parent_oid) if parent_oid is not None else None
+        child_oid = str(child_oid) if child_oid is not None else None
+        if not parent_oid or not child_oid:
+            continue
+        if parent_oid not in entity_local_id_by_oid or child_oid not in entity_local_id_by_oid:
+            continue
+        relationships.append(
+            {
+                "id": f"r_{rx}",
+                "name": r.get("Name") or _erwin_prop(r, _ERWIN_PROP_REL_VERB) or f"rel_{rx}",
+                "parent": entity_local_id_by_oid[parent_oid],
+                "child": entity_local_id_by_oid[child_oid],
+                "cardinality": "one_to_many",
+                "is_identifying": False,
+            }
+        )
+
+    return {
+        "name": model_name,
+        "model_type": "physical",
+        "entities": entities,
+        "relationships": relationships,
     }
