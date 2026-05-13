@@ -24,16 +24,24 @@ from metamart.quality.catalog import (
 def catalog_from_json(data: dict[str, Any]) -> CatalogSnapshot:
     """Convert a JSON catalog spec to a `CatalogSnapshot`.
 
-    Required top-level keys: `name`, `model_type`.
+    Required: `entities` (a list). `name` defaults to "Untitled Model" and
+    `model_type` defaults to "physical" so a partial catalog still scores.
     Each entity needs `id`, `logical_name`, `physical_name`.
-    Each attribute needs `id`, `logical_name`, `physical_name`, `data_type`.
+    Each attribute needs `id`, `physical_name`, `data_type`.
     """
     if not isinstance(data, dict):
-        raise ValueError("catalog must be a JSON object")
-    if "name" not in data:
-        raise ValueError("catalog is missing required key 'name'")
-    if "model_type" not in data:
-        raise ValueError("catalog is missing required key 'model_type'")
+        raise ValueError(
+            "catalog must be a JSON object — see backend/seed_data/*.json for shape"
+        )
+    if "entities" not in data:
+        raise ValueError(
+            "catalog has no 'entities' list — nothing to score. "
+            "Expected shape: {name, model_type, entities: [...]}"
+        )
+    if not isinstance(data["entities"], list):
+        raise ValueError(
+            f"'entities' must be a list, got {type(data['entities']).__name__}"
+        )
 
     next_id = [100]
     id_map: dict[str, int] = {}

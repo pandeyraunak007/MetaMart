@@ -119,6 +119,28 @@ curl -s -X POST http://localhost:8000/api/v1/quality/score-json \
 cd backend && pytest
 ```
 
+## Deploy to Vercel (quality demo)
+
+The `/quality/score-json` endpoint is stateless, so the upload-and-score demo runs on Vercel's free tier. The `mart/*` surface (libraries, check-in/out, permissions) needs Postgres and is not part of the Vercel deployment.
+
+**One-click via GitHub:**
+1. Push this repo to GitHub (already done at https://github.com/pandeyraunak007/MetaMart).
+2. Open https://vercel.com/new, import the repo, and click Deploy.
+3. Vercel reads `vercel.json` at the repo root and:
+   - builds the frontend from `frontend/` (`npm ci && npm run build` → `frontend/dist`),
+   - bundles `api/index.py` + `backend/src/` as a Python serverless function,
+   - rewrites `/api/*` → the function, serves everything else statically.
+4. Public URL like `https://metamart-<your-handle>.vercel.app` once the build finishes.
+
+**CLI (if you have `vercel` installed):**
+```sh
+npm i -g vercel
+vercel              # first run: link to a Vercel project
+vercel --prod       # ship it
+```
+
+The frontend's `api.ts` calls `/api/v1/quality/score-json` as a same-origin path — works in dev (Vite proxy → :8000) and prod (Vercel rewrite → serverless function) with no code changes.
+
 ## Layout
 - `backend/` — FastAPI service + Alembic migrations
   - `src/metamart/mart/` — `M70_*` repository layer
