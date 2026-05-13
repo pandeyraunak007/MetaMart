@@ -275,27 +275,33 @@ Dashboard read endpoints return `ETag` and `Cache-Control: max-age=300`.
 
 Single engineer. ~4.5 weeks.
 
-**M1 — Postgres scaffolding + Mart core schema (5 days).** Alembic migration for the identity hub + hierarchy + versioning + security + audit (no entity/attribute specializations yet). SQLAlchemy mappers. Library/Folder/Model REST CRUD with a permission stub. Docker Compose for Postgres + Redis. Smoke tests.
+**M1 — Postgres scaffolding + Mart core schema (5 days).** ✅ done. Alembic migration for the identity hub + hierarchy + versioning + security + audit (no entity/attribute specializations yet). SQLAlchemy mappers. Library/Folder/Model REST CRUD with a permission stub. Docker Compose for Postgres + Redis. Smoke tests.
 
-**M2 — Versioning, locking, audit (3 days).** Check-out/check-in flow. Workspace pattern. `temporal_upsert` helper. Audit-log writes on every mutation. Permission middleware (FastAPI dependency) enforcing inheritance.
+**M2 — Versioning, locking, audit (3 days).** ✅ done. Check-out/check-in flow. Workspace pattern. `temporal_upsert` helper. Audit-log writes on every mutation. Permission middleware (FastAPI dependency) enforcing inheritance.
 
-**M2.5 — Catalog ingest + entity/attribute specializations (3 days).** Second migration for `m70_subject_area`, `m70_entity`, `m70_attribute`, `m70_key`, `m70_key_member`, `m70_relationship_logical`, `m70_domain`, `m70_glossary_term`, `m70_lineage_edge`, `m70_udp`. JSON-catalog importer + a realistic seed (Northwind + a denormalized warehouse + a greenfield model with intentional violations) so M3+ have real data to score.
+**M2.5 — Catalog ingest + entity/attribute specializations (3 days).** ✅ done. Second migration for `m70_subject_area`, `m70_entity`, `m70_attribute`, `m70_key`, `m70_key_member`, `m70_relationship_logical`, `m70_domain`, `m70_glossary_term`, `m70_lineage_edge`, `m70_udp`. JSON-catalog importer + a realistic seed (Northwind + a denormalized warehouse + a greenfield model with intentional violations) so M3+ have real data to score.
 
-**M3 — Rules engine + scoring math (3 days).** Plugin-style rule registry, severity weights, sub-score and composite math, geometric-mean option. Unit tests against the seeded fixtures.
+**M3 — Rules engine + scoring math (3 days).** ✅ done. Plugin-style rule registry, severity weights, sub-score and composite math, geometric-mean option. Unit tests against the seeded fixtures.
 
-**M4 — The seven default rules (4 days).** "Default" rule pack covering all seven dimensions, pass/fail/edge-case tests each.
+**M4 — The seven default rules (4 days).** ✅ done. "Default" rule pack covering all seven dimensions, pass/fail/edge-case tests each.
 
-**M5 — Scan worker + snapshot persistence (2.5 days).** `arq` worker, single-flight dedupe, scan + snapshot + findings writes, waiver application, Redis cache invalidation. Worker runbook.
+**M5 — Scan worker + snapshot persistence (2.5 days).** 🔲 not started. `arq` worker, single-flight dedupe, scan + snapshot + findings writes, waiver application, Redis cache invalidation. Worker runbook. The frontend currently uses a `localStorage`-backed storage layer (`frontend/src/storage.ts`) so the Vercel demo works without Postgres; that file is the swap-out seam when this milestone lands.
 
-**M6 — Mart Portal UI shell (4 days).** Tree nav, tabbed model view, Overview/Versions/Audit tabs against real data. Auth wiring.
+**M6 — Mart Portal UI shell (4 days).** ✅ done. Tree nav (Library → Folder → Model with grade chips), tabbed model view (Overview / Score / Versions / Audit), header actions (Re-score, Rename, Delete, Save-as-copy, Download JSON). Backed by localStorage instead of the M5 endpoints; everything else from the spec is in.
 
-**M7 — Quality tab + portfolio view (3 days).** Radar + sparkline + findings drill-down. Portfolio table driven by `quality.mv_portfolio_score`.
+**M7 — Quality tab + portfolio view (3 days).** 🟡 partial. ✅ Radar + per-dimension breakdown, severity-and-dimension filter chips on findings, resolved entity-name drill-down, portfolio table with sortable columns + grade-history sparklines + severity dot summaries, Versions tab gets a trend card (large sparkline + delta-since-first). 🔲 still pending: portfolio table backed by a real `quality.mv_portfolio_score` view (currently composed in the browser), version-axis trend chart with audit annotations on the model page.
 
-**M8 — Compare, trends, rule admin (3 days).** Version compare view, version-axis trend chart with audit annotations, rule pack editor with impact preview.
+**M8 — Compare, trends, rule admin (3 days).** 🔲 not started. Version compare view, version-axis trend chart with audit annotations, rule pack editor with impact preview.
 
-**M9 — Reports, retention, polish (2 days).** CSV / Markdown / PDF export, Quality Brief, pg_partman partitioning for `m70_audit_log` and `quality.finding`, retention janitor, README, screenshots.
+**M9 — Reports, retention, polish (2 days).** 🔲 not started. CSV / Markdown / PDF export, Quality Brief, pg_partman partitioning for `m70_audit_log` and `quality.finding`, retention janitor, README, screenshots.
 
-**Total: ~4.5 weeks.**
+### Bonus / unscheduled work that landed
+
+**Auto-fix registry — ✅ done (naming dimension).** Each rule may register an `auto_fix(catalog, finding, snapshot) -> (patched | None, description)` companion via `@registry.register_fix(rule_id=...)`. The engine sets `Finding.fixable = True` when a fixer is registered. Two endpoints — `POST /quality/fix` (one fix) and `POST /quality/fix-all` (loop until clean, with a 50-iter safety cap) — return the patched catalog plus the rescored result. Frontend renders **Fix** buttons on fixable findings and a **Fix all auto-fixable (N)** header button; either action persists the new catalog into the saved model and adds an entry to the Versions tab. Today only naming rules ship fixers (`snake_case_physical`, `max_length`, `reserved_word`); see `docs/AUTOFIX.md` for the extension pattern.
+
+**Foreign-format JSON ingest — ✅ done.** The `quality/adapters.py` cascade detects and normalizes: native MetaMart catalogs, **erwin DM internal flat-array** (the polymorphic `O_Id`/`O_Type`/`Properties` shape from "Save Model As JSON"), erwin "Save As JSON" PascalCase, generic `{tables: [{columns: [...]}]}`, dbt manifest, OpenAPI / JSON Schema, and a recursive walker fallback. eMovies.json (a real erwin DM 12.5 export) round-trips end-to-end through this path.
+
+**Total: ~4.5 weeks** (M1–M4 + M6 + M7-partial + bonus work shipped; M5 + M8 + M9 outstanding).
 
 ---
 
