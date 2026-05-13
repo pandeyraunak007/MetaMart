@@ -20,17 +20,22 @@ from typing import Any
 
 _NAME_KEYS = (
     "name", "Name",
+    "Logical_Name", "logical_name",
+    "LogicalName", "logicalName",
     "tableName", "TableName",
     "EntityName", "entityName",
     "label", "title",
 )
 _PHYSICAL_NAME_KEYS = (
     "PhysicalName", "physicalName",
+    "Physical_Name", "physical_name",
     "TableName", "tableName",
     "ColumnName", "columnName",
+    "Column_Name", "column_name",
 )
 _LOGICAL_NAME_KEYS = (
     "LogicalName", "logicalName",
+    "Logical_Name", "logical_name",
     "DisplayName", "displayName",
     "Label", "label",
 )
@@ -43,9 +48,12 @@ _ATTR_COLLECTION_KEYS = (
 )
 _DATATYPE_KEYS = (
     "DataType", "dataType", "data_type",
+    "Data_Type", "data type",
     "Type", "type",
     "Datatype", "datatype",
     "PhysicalDataType", "physicalDataType",
+    "Physical_Data_Type", "physical_data_type",
+    "Logical_Data_Type", "logical_data_type",
 )
 _NULLABLE_NEG_KEYS = ("NotNull", "notNull", "IsNotNull", "isNotNull", "Required", "required")
 _NULLABLE_POS_KEYS = ("Nullable", "nullable", "IsNullable", "isNullable")
@@ -55,6 +63,9 @@ _PK_FLAG_KEYS = (
     "PrimaryKey", "primary_key", "primaryKey",
     "pk",
 )
+# Single-key wrappers used by erwin "Save As JSON" (e.g. {"Entity": [...]}).
+_ENTITY_INNER_KEYS = ("Entity", "Entities", "entity", "entities", "Table", "Tables", "table", "tables")
+_ATTR_INNER_KEYS = ("Attribute", "Attributes", "attribute", "attributes", "Column", "Columns", "column", "columns")
 
 
 # ── top-level entry point ─────────────────────────────────────
@@ -123,37 +134,121 @@ def _resolve_nullable(a: dict) -> bool:
         return False
     if _g(a, *_NULLABLE_POS_KEYS) is False:
         return False
+    # erwin "Save As JSON" 15.x uses `Null_Option`: "NOT NULL" / "NULL"
+    null_opt = _g(a, "Null_Option", "null_option", "NullOption", "nullOption", default="")
+    if isinstance(null_opt, str) and "NOT" in null_opt.upper():
+        return False
     return True
+
+
+def _is_primary_key(a: dict) -> bool:
+    """True if an attribute dict signals primary-key membership."""
+    if _g(a, *_PK_FLAG_KEYS):
+        return True
+    # erwin 15.x "Save As JSON" uses Key_Type: "PRIMARY KEY" / "FOREIGN KEY"
+    key_type = _g(a, "Key_Type", "key_type", "KeyType", "keyType", "Key", default="")
+    if isinstance(key_type, str) and key_type.strip().upper() in {
+        "PK", "PRIMARY KEY", "PRIMARY"
+    }:
+        return True
+    return False
+
+
+def _flatten_collection(raw: Any, inner_keys: tuple[str, ...]) -> list[Any]:
+    """Flatten erwin-style nested dict {Entity: [...]} into a plain list."""
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        for k in inner_keys:
+            if k in raw:
+                v = raw[k]
+                if isinstance(v, list):
+                    return v
+                if isinstance(v, dict):
+                    return [v]
+    return []
+
+
+# Top-level keys that strongly suggest a whole-catalog wrapper (not a single entity).
+_CATALOG_WRAPPER_KEYS = {
+    "version", "encoding", "description", "metadata",
+    "model", "model_information", "modelinformation",
+    "objects", "mart_information", "martinformation",
+    "entities", "tables", "nodes",
+    "components", "definitions", "schemas",
+    "erwinmodel", "datamodel",
+}
+
+
+def looks_like_catalog_wrapper(d: Any) -> bool:
+    """Does this dict look like a whole-catalog wrapper (rather than a single entity)?
+
+    Used by the API endpoint to decide whether to unwrap a single-element list
+    or treat the list as a bare entities array.
+    """
+    if not isinstance(d, dict):
+        return False
+    lowered = {str(k).lower() for k in d.keys()}
+    return bool(lowered & _CATALOG_WRAPPER_KEYS)
 
 
 # ── erwin adapter (PascalCase Entities/Attributes) ───────────
 
 def _looks_like_erwin(data: dict) -> bool:
-    return any(k in data for k in ("Entities", "ERwinModel", "erwinModel", "DataModel", "Entity"))
+    # Direct: top-level Entities/ERwinModel/DataModel/Entity
+    if any(k in data for k in ("Entities", "ERwinModel", "erwinModel", "DataModel", "Entity")):
+        return True
+    # erwin 15.x "Save As JSON" wrapper: Description mentions "erwin"
+    desc = _g(data, "Description", "description", default="")
+    if isinstance(desc, str) and "erwin" in desc.lower():
+        return True
+    # Nested under Objects key with Entity/Table children
+    objs = _g(data, "Objects", "objects")
+    if isinstance(objs, dict) and any(k in objs for k in _ENTITY_INNER_KEYS):
+        return True
+    # Nested under Model.Entities
+    model = _g(data, "Model", "model", "Model_Information", "model_information")
+    if isinstance(model, dict) and any(k in model for k in _ENTITY_INNER_KEYS):
+        return True
+    return False
 
 
 def _adapt_erwin(data: dict) -> dict[str, Any]:
-    model_block = _g(data, "Model", "ERwinModel", "erwinModel", "DataModel", default={})
+    # Locate the model-info block (erwin 15.x uses "Model_Information")
+    model_block = _g(
+        data,
+        "Model",
+        "Model_Information", "model_information",
+        "ERwinModel", "erwinModel",
+        "DataModel",
+        default={},
+    )
+    objs_block = _g(data, "Objects", "objects", default={})
+
     model_name = (
         _g(data, "Name", "ModelName", "name", "modelName")
-        or _g(model_block, "Name", "ModelName", "name", "modelName")
+        or _g(model_block, "Name", "ModelName", "name", "modelName", "Model_Name", "model_name")
+        or _g(data, "Description", "description")
     )
 
-    raw_entities = (
-        _g(data, "Entities", "Tables", "entities", "tables", "Entity")
-        or _g(model_block, "Entity", "Entities", "Table", "Tables", "entity", "entities", default=[])
+    # Entities can live at any of: data root, model_block, or objs_block.
+    raw_entities: Any = (
+        _g(data, "Entities", "Tables", "entities", "tables")
+        or _g(model_block, *_ENTITY_INNER_KEYS)
+        or _g(objs_block, *_ENTITY_INNER_KEYS)
     )
-    if not isinstance(raw_entities, list):
-        raw_entities = []
+    # erwin sometimes wraps the list in a single-key dict like {"Entity": [...]}
+    raw_entities = _flatten_collection(raw_entities, _ENTITY_INNER_KEYS)
 
     entities = [_adapt_erwin_entity(e, i) for i, e in enumerate(raw_entities) if isinstance(e, dict)]
 
-    raw_rels = (
+    # Relationships similarly can be in several locations.
+    raw_rels: Any = (
         _g(data, "Relationships", "relationships")
-        or _g(model_block, "Relationship", "Relationships", "relationship", "relationships", default=[])
+        or _g(model_block, "Relationship", "Relationships", "relationship", "relationships")
+        or _g(objs_block, "Relationship", "Relationships", "relationship", "relationships")
     )
-    if not isinstance(raw_rels, list):
-        raw_rels = []
+    raw_rels = _flatten_collection(raw_rels, ("Relationship", "Relationships", "relationship", "relationships"))
 
     relationships: list[dict[str, Any]] = []
     for i, r in enumerate(raw_rels):
@@ -187,9 +282,8 @@ def _adapt_erwin_entity(e: dict, idx: int) -> dict[str, Any]:
     physical = _g(e, *_PHYSICAL_NAME_KEYS, *_NAME_KEYS, default=logical)
     e_id = f"e_{_slug(physical or logical)}_{idx}"
 
-    raw_attrs = _g(e, *_ATTR_COLLECTION_KEYS, default=[])
-    if not isinstance(raw_attrs, list):
-        raw_attrs = []
+    # erwin 15.x nests as Attributes: {Attribute: [...]} — flatten that.
+    raw_attrs = _flatten_collection(_g(e, *_ATTR_COLLECTION_KEYS), _ATTR_INNER_KEYS)
 
     attributes: list[dict[str, Any]] = []
     pk_attr_ids: list[str] = []
@@ -211,8 +305,7 @@ def _adapt_erwin_entity(e: dict, idx: int) -> dict[str, Any]:
                 "position": j + 1,
             }
         )
-        is_pk = _g(a, *_PK_FLAG_KEYS) or str(_g(a, "Key", default="")).upper() == "PK"
-        if is_pk:
+        if _is_primary_key(a):
             pk_attr_ids.append(a_id)
 
     keys: list[dict[str, Any]] = []
@@ -226,9 +319,8 @@ def _adapt_erwin_entity(e: dict, idx: int) -> dict[str, Any]:
             }
         )
 
-    raw_keys = _g(e, "Keys", "keys", default=[])
-    if not isinstance(raw_keys, list):
-        raw_keys = []
+    raw_keys = _g(e, "Keys", "keys", "Key_Group", "key_group", default=[])
+    raw_keys = _flatten_collection(raw_keys, ("Key", "Keys", "key", "keys", "Key_Group", "key_group"))
     for k_idx, k in enumerate(raw_keys):
         if not isinstance(k, dict):
             continue

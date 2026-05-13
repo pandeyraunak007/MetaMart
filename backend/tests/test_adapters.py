@@ -272,6 +272,97 @@ def test_unknown_shape_returns_unchanged():
 
 # ── end-to-end ────────────────────────────────────────────
 
+def test_erwin_15x_save_as_json_format():
+    """erwin DM 15.x 'Save Model As JSON' export — wrapped under Objects.Entity,
+    Attributes as {Attribute: [...]}, Physical_Name / Null_Option / Key_Type."""
+    data = {
+        "version": "1.0",
+        "Encoding": "UTF-8",
+        "Description": "This is erwin Generated JSON File. This file is having all the object related informations",
+        "Model_Information": {
+            "Model_Name": "Sales DB",
+            "Database_Type": "SQL Server",
+        },
+        "Objects": {
+            "Entity": [
+                {
+                    "Id": "E1",
+                    "Name": "Customer",
+                    "Logical_Name": "Customer",
+                    "Physical_Name": "Customer",
+                    "Attributes": {
+                        "Attribute": [
+                            {
+                                "Id": "A1",
+                                "Name": "CustomerId",
+                                "Logical_Name": "Customer Id",
+                                "Physical_Name": "CustomerId",
+                                "Logical_Data_Type": "Number(10,0)",
+                                "Physical_Data_Type": "INT",
+                                "Null_Option": "NOT NULL",
+                                "Key_Type": "PRIMARY KEY",
+                            },
+                            {
+                                "Id": "A2",
+                                "Name": "Email",
+                                "Logical_Name": "Email",
+                                "Physical_Name": "Email",
+                                "Physical_Data_Type": "VARCHAR(320)",
+                                "Null_Option": "NULL",
+                            },
+                        ]
+                    },
+                },
+                {
+                    "Id": "E2",
+                    "Name": "Order",
+                    "Logical_Name": "Order",
+                    "Physical_Name": "OrderHeader",
+                    "Attributes": {
+                        "Attribute": [
+                            {
+                                "Id": "A3",
+                                "Name": "OrderId",
+                                "Physical_Name": "OrderId",
+                                "Physical_Data_Type": "INT",
+                                "Null_Option": "NOT NULL",
+                                "Key_Type": "PRIMARY KEY",
+                            }
+                        ]
+                    },
+                },
+            ],
+            "Relationship": [
+                {
+                    "Name": "customer_orders",
+                    "ParentEntity": "Customer",
+                    "ChildEntity": "Order",
+                }
+            ],
+        },
+    }
+    out = normalize_catalog(data)
+    assert out["name"] == "Sales DB"
+    assert len(out["entities"]) == 2
+    customer = next(e for e in out["entities"] if e["physical_name"] == "Customer")
+    assert customer["logical_name"] == "Customer"
+    assert len(customer["attributes"]) == 2
+    cust_id = next(a for a in customer["attributes"] if a["physical_name"] == "CustomerId")
+    assert cust_id["data_type"] == "INT"
+    assert cust_id["is_nullable"] is False
+    assert len(customer["keys"]) == 1
+    assert customer["keys"][0]["key_type"] == "PK"
+
+
+def test_catalog_wrapper_detection():
+    from metamart.quality.adapters import looks_like_catalog_wrapper
+    assert looks_like_catalog_wrapper({"version": "1.0", "Description": "..."})
+    assert looks_like_catalog_wrapper({"Objects": {}})
+    assert looks_like_catalog_wrapper({"Model": {}, "metadata": {}})
+    assert not looks_like_catalog_wrapper({"Name": "X", "Attributes": []})  # an entity
+    assert not looks_like_catalog_wrapper("not a dict")
+
+
 def test_erwin_via_engine_produces_a_grade():
     import metamart.quality  # noqa: F401  -- register rules
     from metamart.quality.engine import score_catalog
