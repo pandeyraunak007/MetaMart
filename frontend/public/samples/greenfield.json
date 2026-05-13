@@ -1,0 +1,52 @@
+{
+  "name": "Greenfield Prototype (Violations)",
+  "model_type": "physical",
+  "description": "A prototype with intentional violations: PascalCase physical names, missing PKs, orphan tables, raw types where domains should bind, cross-entity type inconsistency. Expected to score F.",
+  "entities": [
+    {
+      "id": "e_user_data",
+      "logical_name": "User Data",
+      "physical_name": "UserData",
+      "attributes": [
+        {"id": "a_ud_id", "logical_name": "User Id", "physical_name": "UserID", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_ud_email", "logical_name": "Email", "physical_name": "EmailAddress", "data_type": "VARCHAR(500)", "is_nullable": true, "position": 2},
+        {"id": "a_ud_name", "logical_name": "Name", "physical_name": "FullName", "data_type": "VARCHAR(256)", "is_nullable": true, "position": 3}
+      ]
+    },
+    {
+      "id": "e_order_info",
+      "logical_name": "Order Info",
+      "physical_name": "OrderInfo",
+      "attributes": [
+        {"id": "a_oi_id", "logical_name": "Order Id", "physical_name": "orderID", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_oi_user", "logical_name": "User Id", "physical_name": "userID", "data_type": "INTEGER", "is_nullable": true, "position": 2},
+        {"id": "a_oi_total", "logical_name": "Total", "physical_name": "total_amount", "data_type": "FLOAT", "is_nullable": true, "position": 3},
+        {"id": "a_oi_tags", "logical_name": "Tags", "physical_name": "tagList", "data_type": "VARCHAR(2000)", "is_nullable": true, "position": 4}
+      ],
+      "keys": [
+        {"id": "k_oi_pk", "name": "pk_order_info", "key_type": "PK", "members": ["a_oi_id"]}
+      ]
+    },
+    {
+      "id": "e_temp_table",
+      "logical_name": "Temp Table",
+      "physical_name": "tmp_stuff",
+      "is_staging": true,
+      "attributes": [
+        {"id": "a_tt_a", "logical_name": "A", "physical_name": "a", "data_type": "TEXT", "is_nullable": true, "position": 1}
+      ]
+    },
+    {
+      "id": "e_legacy_log",
+      "logical_name": "Legacy Log",
+      "physical_name": "LegacyLog",
+      "attributes": [
+        {"id": "a_ll_id", "logical_name": "Log Id", "physical_name": "log_id", "data_type": "BIGINT", "is_nullable": false, "position": 1},
+        {"id": "a_ll_payload", "logical_name": "Payload", "physical_name": "Payload", "data_type": "TEXT", "is_nullable": true, "position": 2}
+      ]
+    }
+  ],
+  "relationships": [
+    {"id": "r_oi_ud", "name": "user_orders", "parent": "e_user_data", "child": "e_order_info", "cardinality": "one_to_many"}
+  ]
+}

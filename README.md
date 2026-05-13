@@ -43,7 +43,20 @@ API at http://localhost:8000, docs at http://localhost:8000/docs.
 
 ## Score your own model
 
-Both paths use the Default rule pack and require no DB.
+Three paths, all using the Default rule pack, all no-DB.
+
+**Web UI** (recommended) — drag-drop or paste JSON, see grade + radar + findings:
+```sh
+# Terminal 1 — backend
+cd backend && source .venv/bin/activate
+uvicorn metamart.main:app --reload
+
+# Terminal 2 — frontend
+cd frontend
+npm install
+npm run dev
+```
+Then open http://localhost:5173. The Vite dev server proxies `/api/*` to the backend at `:8000`.
 
 **CLI** (prints to stdout):
 ```sh
