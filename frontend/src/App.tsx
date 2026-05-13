@@ -16,9 +16,13 @@ import Banner from './components/Banner'
 import Sidebar from './components/Sidebar'
 import Uploader from './components/Uploader'
 import ModelView from './components/ModelView'
+import Portfolio from './components/Portfolio'
+
+type View = 'browse' | 'portfolio'
 
 export default function App() {
   const [state, setState] = useState<MartState>(() => loadState())
+  const [view, setView] = useState<View>('browse')
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null)
   const [selectedLibraryId, setSelectedLibraryId] = useState<string | null>(null)
@@ -119,28 +123,49 @@ export default function App() {
     <div className="h-screen flex flex-col bg-slate-50">
       <Banner />
       <div className="flex-1 flex min-h-0">
-        <Sidebar
-          state={state}
-          selectedModelId={selectedModelId}
-          selectedFolderId={selectedFolderId}
-          onSelectModel={(modelId, folderId, libraryId) => {
-            setSelectedModelId(modelId)
-            setSelectedFolderId(folderId)
-            setSelectedLibraryId(libraryId)
-          }}
-          onSelectFolder={(folderId, libraryId) => {
-            setSelectedFolderId(folderId)
-            setSelectedLibraryId(libraryId)
-            setSelectedModelId(null)
-          }}
-          onCreateLibrary={(name) => persist(createLibrary(state, name))}
-          onCreateFolder={(libraryId, name) =>
-            persist(createFolder(state, libraryId, name))
-          }
-          onRequestNewModel={handleRequestNewModel}
-        />
+        <div className="w-72 shrink-0 border-r border-slate-200 bg-white flex flex-col">
+          <ViewToggle view={view} onChange={setView} />
+          {view === 'browse' && (
+            <Sidebar
+              state={state}
+              selectedModelId={selectedModelId}
+              selectedFolderId={selectedFolderId}
+              onSelectModel={(modelId, folderId, libraryId) => {
+                setSelectedModelId(modelId)
+                setSelectedFolderId(folderId)
+                setSelectedLibraryId(libraryId)
+              }}
+              onSelectFolder={(folderId, libraryId) => {
+                setSelectedFolderId(folderId)
+                setSelectedLibraryId(libraryId)
+                setSelectedModelId(null)
+              }}
+              onCreateLibrary={(name) => persist(createLibrary(state, name))}
+              onCreateFolder={(libraryId, name) =>
+                persist(createFolder(state, libraryId, name))
+              }
+              onRequestNewModel={handleRequestNewModel}
+            />
+          )}
+          {view === 'portfolio' && (
+            <div className="px-4 py-6 text-xs text-slate-500 leading-relaxed">
+              Cross-library scoreboard. Click any row in the table to open that
+              model.
+            </div>
+          )}
+        </div>
         <main className="flex-1 min-w-0 overflow-hidden">
-          {selected ? (
+          {view === 'portfolio' ? (
+            <Portfolio
+              state={state}
+              onOpenModel={(modelId, folderId, libraryId) => {
+                setSelectedModelId(modelId)
+                setSelectedFolderId(folderId)
+                setSelectedLibraryId(libraryId)
+                setView('browse')
+              }}
+            />
+          ) : selected ? (
             <ModelView
               model={selected.model}
               rescoring={busy}
@@ -184,6 +209,32 @@ export default function App() {
             </div>
           )}
         </main>
+      </div>
+    </div>
+  )
+}
+
+function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => void }) {
+  const tabs: Array<{ id: View; label: string }> = [
+    { id: 'browse', label: 'Browse' },
+    { id: 'portfolio', label: 'Portfolio' },
+  ]
+  return (
+    <div className="px-3 pt-3 pb-3 border-b border-slate-200">
+      <div className="grid grid-cols-2 gap-1 bg-slate-100 rounded-lg p-1">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => onChange(t.id)}
+            className={`text-xs font-semibold py-1.5 rounded-md transition-colors ${
+              view === t.id
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
     </div>
   )

@@ -41,6 +41,8 @@ def score_catalog(
             rule_out = [replace(f, severity=cfg.severity_override) for f in rule_out]
         findings.extend(rule_out)
 
+    findings = _resolve_target_names(findings, catalog)
+
     findings_by_dim: dict[Dimension, list[Finding]] = defaultdict(list)
     for f in findings:
         findings_by_dim[f.dimension].append(f)
@@ -77,6 +79,43 @@ def score_catalog(
         sub_scores=sub_scores,
         findings=findings,
     )
+
+
+def _resolve_target_names(
+    findings: list[Finding], catalog: CatalogSnapshot
+) -> list[Finding]:
+    """Walk the snapshot once to attach a friendly `target_name` to each finding.
+
+    Lets the UI show "CUSTOMER.email" instead of "obj_id 142" without having
+    to re-derive context from the message string.
+    """
+    entity_by_id = catalog.entity_by_id
+    entity_name_by_attr_id: dict[int, str] = {}
+    attr_by_id: dict[int, object] = {}
+    for e in catalog.entities:
+        for a in e.attributes:
+            entity_name_by_attr_id[a.obj_id] = e.physical_name
+            attr_by_id[a.obj_id] = a
+    domain_by_id = catalog.domain_by_id
+    glossary_by_id = catalog.glossary_by_id
+
+    def resolve(obj_id: int) -> str | None:
+        ent = entity_by_id.get(obj_id)
+        if ent is not None:
+            return ent.physical_name
+        if obj_id in attr_by_id:
+            attr = attr_by_id[obj_id]
+            entity_name = entity_name_by_attr_id.get(obj_id, "?")
+            return f"{entity_name}.{attr.physical_name}"  # type: ignore[attr-defined]
+        dom = domain_by_id.get(obj_id)
+        if dom is not None:
+            return dom.name
+        term = glossary_by_id.get(obj_id)
+        if term is not None:
+            return term.name
+        return None
+
+    return [replace(f, target_name=resolve(f.target_obj_id)) for f in findings]
 
 
 def run_scan(

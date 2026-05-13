@@ -14,6 +14,7 @@ export interface Finding {
   dimension: Dimension
   severity: Severity
   target_obj_id: number
+  target_name: string | null
   message: string
   remediation: string | null
 }

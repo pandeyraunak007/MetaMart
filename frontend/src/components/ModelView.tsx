@@ -5,6 +5,7 @@ import ScoreHero from './ScoreHero'
 import RadarPanel from './RadarPanel'
 import SubScoreList from './SubScoreList'
 import FindingsList from './FindingsList'
+import Sparkline from './Sparkline'
 
 type Tab = 'overview' | 'score' | 'versions' | 'audit'
 
@@ -148,49 +149,92 @@ function VersionsTab({ model }: { model: SavedModel }) {
   if (model.scans.length === 0) {
     return <EmptyMsg text="No scans yet." />
   }
-  // Build delta vs the next-older scan (scans are stored newest-first).
+  const series = model.scans.map((s) => s.result.composite_score)  // newest-first
+  const latest = series[0]
+  const oldest = series[series.length - 1]
+  const trend = series.length > 1 ? latest - oldest : 0
+  const min = Math.min(...series)
+  const max = Math.max(...series)
+
   return (
-    <div className="rounded-2xl bg-white border border-slate-200 shadow-sm overflow-hidden max-w-4xl">
-      <table className="w-full text-sm">
-        <thead className="bg-slate-50 border-b border-slate-200">
-          <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
-            <th className="px-5 py-3 font-semibold">When</th>
-            <th className="px-5 py-3 font-semibold">Grade</th>
-            <th className="px-5 py-3 font-semibold">Composite</th>
-            <th className="px-5 py-3 font-semibold">Δ</th>
-            <th className="px-5 py-3 font-semibold">Findings</th>
-          </tr>
-        </thead>
-        <tbody>
-          {model.scans.map((scan, i) => {
-            const prev = model.scans[i + 1]
-            const delta = prev
-              ? scan.result.composite_score - prev.result.composite_score
-              : null
-            return (
-              <tr key={scan.id} className="border-b border-slate-100 last:border-b-0">
-                <td className="px-5 py-3 text-slate-600">{fmtDate(scan.scanned_at)}</td>
-                <td className="px-5 py-3 font-bold">{scan.result.grade}</td>
-                <td className="px-5 py-3 font-mono tabular-nums">
-                  {scan.result.composite_score.toFixed(2)}
-                </td>
-                <td className="px-5 py-3 font-mono text-xs">
-                  {delta === null ? (
-                    <span className="text-slate-400">—</span>
-                  ) : delta > 0 ? (
-                    <span className="text-emerald-600">+{delta.toFixed(2)}</span>
-                  ) : delta < 0 ? (
-                    <span className="text-red-600">{delta.toFixed(2)}</span>
-                  ) : (
-                    <span className="text-slate-400">0.00</span>
-                  )}
-                </td>
-                <td className="px-5 py-3 text-slate-600">{scan.result.findings.length}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+    <div className="max-w-4xl space-y-6">
+      <div className="rounded-2xl bg-white border border-slate-200 p-6 shadow-sm">
+        <div className="flex items-center justify-between gap-6">
+          <div>
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+              Score trend
+            </p>
+            <p className="text-3xl font-semibold text-slate-900 tabular-nums mt-1">
+              {latest.toFixed(2)}
+              {series.length > 1 && (
+                <span
+                  className={`ml-3 text-sm font-mono ${
+                    trend > 0
+                      ? 'text-emerald-600'
+                      : trend < 0
+                        ? 'text-red-600'
+                        : 'text-slate-400'
+                  }`}
+                >
+                  {trend > 0 ? '+' : ''}
+                  {trend.toFixed(2)} since first
+                </span>
+              )}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              {series.length} {series.length === 1 ? 'scan' : 'scans'}
+              <span className="mx-1.5 text-slate-300">·</span>
+              min {min.toFixed(2)}
+              <span className="mx-1.5 text-slate-300">·</span>
+              max {max.toFixed(2)}
+            </p>
+          </div>
+          <Sparkline values={series} width={240} height={64} />
+        </div>
+      </div>
+
+      <div className="rounded-2xl bg-white border border-slate-200 shadow-sm overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 border-b border-slate-200">
+            <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
+              <th className="px-5 py-3 font-semibold">When</th>
+              <th className="px-5 py-3 font-semibold">Grade</th>
+              <th className="px-5 py-3 font-semibold">Composite</th>
+              <th className="px-5 py-3 font-semibold">Δ</th>
+              <th className="px-5 py-3 font-semibold">Findings</th>
+            </tr>
+          </thead>
+          <tbody>
+            {model.scans.map((scan, i) => {
+              const prev = model.scans[i + 1]
+              const delta = prev
+                ? scan.result.composite_score - prev.result.composite_score
+                : null
+              return (
+                <tr key={scan.id} className="border-b border-slate-100 last:border-b-0">
+                  <td className="px-5 py-3 text-slate-600">{fmtDate(scan.scanned_at)}</td>
+                  <td className="px-5 py-3 font-bold">{scan.result.grade}</td>
+                  <td className="px-5 py-3 font-mono tabular-nums">
+                    {scan.result.composite_score.toFixed(2)}
+                  </td>
+                  <td className="px-5 py-3 font-mono text-xs">
+                    {delta === null ? (
+                      <span className="text-slate-400">—</span>
+                    ) : delta > 0 ? (
+                      <span className="text-emerald-600">+{delta.toFixed(2)}</span>
+                    ) : delta < 0 ? (
+                      <span className="text-red-600">{delta.toFixed(2)}</span>
+                    ) : (
+                      <span className="text-slate-400">0.00</span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3 text-slate-600">{scan.result.findings.length}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

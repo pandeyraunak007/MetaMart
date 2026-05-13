@@ -49,6 +49,9 @@ class Finding:
     target_obj_id: int
     message: str
     remediation: str | None = None
+    # Resolved by the engine after rules run — UI uses this for friendly
+    # drill-down without re-walking the catalog. "Entity" or "Entity.attr".
+    target_name: str | None = None
 
 
 @dataclass(frozen=True)

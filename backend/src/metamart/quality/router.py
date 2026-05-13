@@ -155,6 +155,7 @@ def _to_schema(result: ScanResult) -> ScanResultRead:
                 dimension=f.dimension.value,
                 severity=f.severity.value,
                 target_obj_id=f.target_obj_id,
+                target_name=f.target_name,
                 message=f.message,
                 remediation=f.remediation,
             )

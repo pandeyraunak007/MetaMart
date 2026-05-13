@@ -32,8 +32,8 @@ export default function Sidebar({
   onRequestNewModel,
 }: Props) {
   return (
-    <aside className="w-72 shrink-0 border-r border-slate-200 bg-white flex flex-col">
-      <div className="px-4 py-3.5 border-b border-slate-200 flex items-center justify-between">
+    <div className="flex-1 flex flex-col min-h-0">
+      <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
         <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
           Libraries
         </h2>
@@ -62,7 +62,7 @@ export default function Sidebar({
           />
         ))}
       </div>
-    </aside>
+    </div>
   )
 }
 

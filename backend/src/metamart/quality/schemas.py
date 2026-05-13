@@ -7,6 +7,7 @@ class FindingRead(BaseModel):
     dimension: str
     severity: str
     target_obj_id: int
+    target_name: str | None = None
     message: str
     remediation: str | None = None
 
